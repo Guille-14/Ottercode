@@ -1209,6 +1209,26 @@ def api_workspace(task_id: Optional[str] = None) -> Dict[str, Any]:
 
 # --------------------------- Entregables / archivos ------------------------
 
+class FileSaveRequest(BaseModel):
+    task_id: str
+    path: str
+    content: str = ""
+
+
+@router.post(Route.FILE_SAVE)
+def api_file_save(req: FileSaveRequest) -> Dict[str, Any]:
+    """Guarda un archivo del workspace desde Studio (edición humana)."""
+    workdir, tid = _resolve_workspace(req.task_id)
+    try:
+        executor = tools.ToolExecutor(workdir)
+        target = executor.resolve_safe(req.path)
+    except tools.ToolError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(req.content, encoding="utf-8")
+    return {"ok": True, "task_id": tid, "path": req.path, "bytes": len(req.content.encode("utf-8"))}
+
+
 @router.get(Route.FILE)
 def api_file(task_id: str, path: str, download: int = 0):
     """Sirve un archivo del workspace (viewer UI). download=1 fuerza descarga."""

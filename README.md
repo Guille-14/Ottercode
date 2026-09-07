@@ -5,6 +5,8 @@ Orquestador **local** de agentes autónomos estilo Arena AI: Ollama + MCP + RAG 
 ## Quickstart
 
 ```bash
+bash install.sh
+# o a mano:
 # Backend
 python -m venv .venv && source .venv/bin/activate
 pip install -e .

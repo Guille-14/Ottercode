@@ -40,6 +40,7 @@ interface UiState {
   loopMode: boolean
   maxRounds: number
   hacker: boolean
+  yolo: boolean
   totalTokens: number
   tokensPerSec: number
   setView: (v: string) => void
@@ -49,6 +50,7 @@ interface UiState {
   setLoopMode: (v: boolean) => void
   setMaxRounds: (n: number) => void
   setHacker: (v: boolean) => void
+  setYolo: (v: boolean) => void
   enqueueMission: (text: string, payload: Record<string, unknown>) => void
   dequeueMission: (id: string) => void
   startMission: (payload: Record<string, unknown>) => Promise<void>
@@ -105,6 +107,7 @@ export const useUi = create<UiState>()(
       loopMode: false,
       maxRounds: 8,
       hacker: false,
+      yolo: false,
       totalTokens: 0,
       tokensPerSec: 0,
       setView: (v) => set({ view: v }),
@@ -129,6 +132,7 @@ export const useUi = create<UiState>()(
       setLoopMode: (v) => set({ loopMode: v }),
       setMaxRounds: (n) => set({ maxRounds: n }),
       setHacker: (v) => set({ hacker: v }),
+      setYolo: (v) => set({ yolo: v }),
       openStudio: (t) => set({ studio: t }),
       closeStudio: () => set({ studio: null }),
       toggleFocus: () => set((s) => ({ focus: !s.focus })),
@@ -278,6 +282,7 @@ export const useUi = create<UiState>()(
         loopMode: state.loopMode,
         maxRounds: state.maxRounds,
         hacker: state.hacker,
+        yolo: state.yolo,
       }),
     },
   ),

@@ -411,4 +411,12 @@ export const api = {
   zipUrl: (taskId: string) => `${BASE}/task/${encodeURIComponent(taskId)}/zip`,
   fileUrl: (taskId: string, path: string) =>
     `${BASE}/file?task_id=${encodeURIComponent(taskId)}&path=${encodeURIComponent(path)}`,
+  saveFile: (taskId: string, path: string, content: string) =>
+    j<{ ok: boolean; path: string; bytes: number }>(
+      fetchWithAuth(`${BASE}/file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId, path, content }),
+      }),
+    ),
 }

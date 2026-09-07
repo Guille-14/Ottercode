@@ -28,6 +28,8 @@ export default function ChatInputBar({
   const setMaxRounds = useUi((s) => s.setMaxRounds)
   const hacker = useUi((s) => s.hacker)
   const setHacker = useUi((s) => s.setHacker)
+  const yolo = useUi((s) => s.yolo)
+  const setYolo = useUi((s) => s.setYolo)
   const missionQueue = useUi((s) => s.missionQueue)
   const enqueueMission = useUi((s) => s.enqueueMission)
   const dequeueMission = useUi((s) => s.dequeueMission)
@@ -130,6 +132,7 @@ export default function ChatInputBar({
         loop_mode: loopMode,
         max_rounds: loopMode ? maxRounds : undefined,
         hacker,
+        yolo: yolo || Boolean(parsed.fields.yolo),
       }
       enqueueMission(trimmed, payload)
       setTask('')
@@ -169,6 +172,7 @@ export default function ChatInputBar({
       loop_mode: loopMode,
       max_rounds: loopMode ? maxRounds : undefined,
       hacker,
+      yolo: yolo || Boolean(parsed.fields.yolo),
     })
     setTask('')
   }
@@ -259,6 +263,17 @@ export default function ChatInputBar({
           >
             <Skull className="h-3 w-3" />
             Hacker
+          </button>
+          <button
+            id="yoloBtn"
+            type="button"
+            onClick={() => setYolo(!yolo)}
+            className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-semibold border transition-colors ${
+              yolo ? 'bg-accent text-accentink border-accent' : 'bg-panel2 text-ink2 border-line2 hover:text-ink'
+            }`}
+            title="YOLO: ejecutar herramientas peligrosas sin pedir permiso"
+          >
+            YOLO
           </button>
           <button
             id="planBtn"

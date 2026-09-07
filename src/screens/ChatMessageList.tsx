@@ -7,7 +7,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import { Bot, User, ChevronDown, Wrench, Copy, Check, FileCode, RotateCcw, Download, Loader2 } from 'lucide-react'
 import type { MissionEvent } from '../store'
-import { isDoneName } from '../store'
+import { useUi, isDoneName } from '../store'
 import { api } from '../api'
 import { Button } from '../ui'
 import { F } from '../features'
@@ -54,7 +54,7 @@ function buildSeg(
   agent: string,
   final: boolean,
 ): Seg {
-  const seg: Seg = { key: '', agent, buf: '', final, tools: [] }
+  const seg: Seg = { key: '', type: 'agent', agent, buf: '', final, tools: [], missionIndex: start }
   for (let i = start; i <= end; i++) {
     const ev = mission[i]
     if (ev.name === 'token' && typeof ev.data.token === 'string') {
@@ -76,10 +76,9 @@ function buildSeg(
 }
 
 function buildSegs(mission: MissionEvent[]): Seg[] {
-  if (mission.length === 0) return []
   const out: Seg[] = []
-
-  for (let i = 0; i < mission.length; i++) {
+  let i = 0
+  while (i < mission.length) {
     const ev = mission[i]
     if (ev.name === 'system') {
       out.push({
@@ -90,12 +89,42 @@ function buildSegs(mission: MissionEvent[]): Seg[] {
         final: true,
         tools: [],
         systemText: String(ev.data.text ?? ''),
+        missionIndex: i,
       })
+      i++
       continue
     }
-    // ... el resto de la lógica ...
+    if (ev.name === 'agent_start') {
+      const agent = String(ev.data.nombre ?? ev.data.agent ?? 'Otter')
+      const start = i
+      let end = i
+      let j = i + 1
+      while (j < mission.length) {
+        const n = mission[j].name
+        if (n === 'agent_start') break
+        end = j
+        j++
+        if (n === 'agent_end') break
+      }
+      const closed = segIsClosed(mission, start, end)
+      const key = `${ev.id}:${end}`
+      const cached = closed ? segCache.get(key) : undefined
+      if (cached) {
+        out.push(cached)
+      } else {
+        const seg = buildSeg(mission, start, end, agent, closed)
+        seg.key = key
+        seg.type = 'agent'
+        seg.missionIndex = start
+        if (closed) segCache.set(key, seg)
+        out.push(seg)
+      }
+      i = j
+      continue
+    }
+    i++
   }
-  // ...
+  return out
 }
 
 function splitThinking(buf: string): { thought: string; text: string } {
@@ -119,6 +148,42 @@ function splitThinking(buf: string): { thought: string; text: string } {
     return { thought: buf.replace(' thinking', '').trim(), text: '' }
   }
   return { thought: '', text: buf }
+}
+
+function PlanCard({
+  mission,
+  taskId,
+  streaming,
+}: {
+  mission: MissionEvent[]
+  taskId: string | null
+  streaming: boolean
+}) {
+  const startMission = useUi((s) => s.startMission)
+  const model = useUi((s) => s.model)
+  const done = [...mission].reverse().find((e) => e.name === 'task_done')
+  const ready = Boolean(done?.data.plan_ready)
+  const [plan, setPlan] = useState(String(done?.data.plan ?? ''))
+  const [editing, setEditing] = useState(false)
+  if (!ready || streaming) return null
+  const context = String(done?.data.context ?? '')
+  const original = String((done?.data.task as string) || '')
+  return (
+    <div className="rounded-xl border border-accent/30 bg-accent/5 p-3">
+      <p className="mb-2 text-xs font-semibold text-ink">Plan listo — revisa antes de ejecutar</p>
+      {editing ? (
+        <textarea className="mb-2 w-full rounded-lg border border-line bg-canvas p-2 text-xs" rows={8} value={plan} onChange={(e) => setPlan(e.target.value)} />
+      ) : (
+        <pre className="mb-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs text-ink">{plan}</pre>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => void startMission({ task: original || 'ejecutar plan aprobado', model, mode: 'chat', start_agent: 'agent', resume_plan: { plan, context }, resume_task: original, continue_task: taskId || undefined })}>Ejecutar</Button>
+        <Button variant="ghost" onClick={() => setEditing((v) => !v)}>{editing ? 'Vista' : 'Editar'}</Button>
+        <Button variant="ghost" onClick={() => void startMission({ task: `Regenera el plan: ${plan.slice(0, 400)}`, model, mode: 'chat', start_agent: 'agent', plan_only: true, continue_task: taskId || undefined })}>Regenerar</Button>
+        <Button variant="ghost" onClick={() => setPlan('')}>Rechazar</Button>
+      </div>
+    </div>
+  )
 }
 
 function SalvageProgressCard({ text }: { text: string }) {
@@ -338,9 +403,15 @@ export default function ChatMessageList({
       )}
 
       {/* Burbuts del asistente: una por agente */}
-      {segs.map((seg, i) => (
-        <SegBubble key={seg.key} seg={seg} streaming={streaming} last={i === segs.length - 1} hideLogs={hideLogs} />
-      ))}
+      {segs.map((seg, i) =>
+        seg.type === 'system' ? (
+          <SystemBubble key={seg.key} text={seg.systemText ?? ''} />
+        ) : (
+          <SegBubble key={seg.key} seg={seg} streaming={streaming} last={i === segs.length - 1} hideLogs={hideLogs} />
+        ),
+      )}
+
+      <PlanCard mission={mission} taskId={taskId} streaming={streaming} />
 
       {/* Tarjeta de Archivos Generados */}
       {files.length > 0 && (

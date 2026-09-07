@@ -49,7 +49,7 @@ export function applySlash(line: string): SlashResult {
     case '/focus':
       return { fields: {}, action: '/focus' }
     case '/yolo':
-      return { fields: { task: arg, start_agent: 'developer', mode: 'chain' } }
+      return { fields: { task: arg || 'ejecutar', start_agent: 'developer', mode: 'chain', yolo: true } }
     default:
       if (cmd.startsWith('/') && cmd.length > 1) {
         const skill = cmd.slice(1)

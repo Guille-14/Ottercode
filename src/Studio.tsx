@@ -101,52 +101,40 @@ function Explorer({ onOpen, selected }: { onOpen: (p: string) => void; selected:
   )
 }
 
-function StudioCodeViewer({ code, path }: { code: string; path: string }) {
+function StudioCodeViewer({
+  code, path, onChange, onSave, dirty, saving,
+}: {
+  code: string; path: string; onChange: (v: string) => void; onSave: () => void; dirty: boolean; saving: boolean
+}) {
   const [copied, setCopied] = useState(false)
-  const lines = code.split('\n')
-
   const handleCopy = () => {
     navigator.clipboard.writeText(code).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     }).catch(() => undefined)
   }
-
   return (
     <div className="flex flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
-      {/* Editor Header */}
       <header className="flex h-10 shrink-0 items-center justify-between border-b border-line bg-panel px-4">
         <div className="flex items-center gap-1.5 min-w-0">
           <FileCode className="h-4 w-4 text-accent shrink-0" />
           <span className="text-xs font-semibold text-muted truncate">{path.split('/').pop()}</span>
+          {dirty && <span className="text-[10px] text-accent">sin guardar</span>}
         </div>
-        <button
-          type="button"
-          onClick={handleCopy}
-          className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-line bg-canvas px-2.5 text-[11px] font-semibold text-muted transition-colors hover:text-ink"
-        >
-          <Copy className="h-3 w-3" />
-          <span>{copied ? '¡Copiado!' : 'Copiar'}</span>
-        </button>
+        <div className="flex gap-1.5">
+          <button type="button" onClick={onSave} disabled={!dirty || saving}
+            className="inline-flex h-7 items-center rounded-lg border border-line bg-canvas px-2.5 text-[11px] font-semibold text-muted hover:text-ink disabled:opacity-40">
+            {saving ? 'Guardando…' : 'Guardar'}
+          </button>
+          <button type="button" onClick={handleCopy}
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-line bg-canvas px-2.5 text-[11px] font-semibold text-muted hover:text-ink">
+            <Copy className="h-3 w-3" />
+            <span>{copied ? '¡Copiado!' : 'Copiar'}</span>
+          </button>
+        </div>
       </header>
-
-      {/* Editor Body */}
-      <div className="oc-mono flex-1 overflow-auto p-4 text-xs leading-relaxed select-text">
-        <table className="w-full border-collapse">
-          <tbody>
-            {lines.map((line, i) => (
-              <tr key={i} className="hover:bg-canvas/40 transition-colors">
-                <td className="w-12 select-none pr-4 text-right text-muted/40 font-medium align-top border-r border-line/30">
-                  {i + 1}
-                </td>
-                <td className="pl-4 whitespace-pre-wrap break-all text-ink align-top selection:bg-accent/20">
-                  {line || ' '}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <textarea className="oc-mono flex-1 resize-none overflow-auto bg-transparent p-4 text-xs leading-relaxed text-ink outline-none"
+        value={code} onChange={(e) => onChange(e.target.value)} spellCheck={false} />
     </div>
   )
 }
@@ -154,6 +142,8 @@ function StudioCodeViewer({ code, path }: { code: string; path: string }) {
 export default function Studio() {
   const { studio, closeStudio } = useUi()
   const [content, setContent] = useState('')
+  const [saved, setSaved] = useState('')
+  const [saving, setSaving] = useState(false)
   const [loadErr, setLoadErr] = useState('')
   const [openPath, setOpenPath] = useState(studio?.path ?? '')
 
@@ -175,10 +165,19 @@ export default function Studio() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.text()
       })
-      .then((t) => setContent(t))
+      .then((t) => { setContent(t); setSaved(t) })
       .catch((e) => setLoadErr((e as Error).message))
   }, [taskId, openPath])
 
+  const dirty = content !== saved
+  const handleSave = () => {
+    if (!taskId || !openPath || !dirty) return
+    setSaving(true)
+    api.saveFile(taskId, openPath, content)
+      .then(() => setSaved(content))
+      .catch((e) => setLoadErr((e as Error).message))
+      .finally(() => setSaving(false))
+  }
   const hard = useMemo(() => F.hardenSrcdoc(content), [content])
 
   const previewExt = (() => {
@@ -230,7 +229,7 @@ export default function Studio() {
           ) : previewHtml ? (
             /* Vista partida: Código a la izquierda, Iframe a la derecha */
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-full w-full">
-              <StudioCodeViewer code={content} path={openPath} />
+              <StudioCodeViewer code={content} path={openPath} onChange={setContent} onSave={handleSave} dirty={dirty} saving={saving} />
               <div className="flex flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
                 <header className="flex h-10 shrink-0 items-center justify-between border-b border-line bg-panel px-4">
                   <div className="flex items-center gap-1.5">
@@ -260,7 +259,7 @@ export default function Studio() {
           ) : (
             /* Vista completa: Solo Editor de código */
             <div className="h-full w-full">
-              <StudioCodeViewer code={content} path={openPath} />
+              <StudioCodeViewer code={content} path={openPath} onChange={setContent} onSave={handleSave} dirty={dirty} saving={saving} />
             </div>
           )}
         </div>

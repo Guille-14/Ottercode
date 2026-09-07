@@ -398,7 +398,7 @@ export default function ArtifactsPanel() {
           <iframe
             className="h-full w-full rounded-xl border border-line bg-white shadow-sm"
             style={{ width: '100%', height: '100%', border: 'none' }}
-            sandbox="allow-scripts allow-same-origin allow-forms"
+            sandbox="allow-scripts allow-forms allow-popups"
             title="preview artefacto"
             srcDoc={F.hardenSrcdoc(raw)}
           />
