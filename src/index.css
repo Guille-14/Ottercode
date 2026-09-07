@@ -1,0 +1,351 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * OtterCode Design System · Fusión V2
+ * Paleta heredada de ottercode-v2/static/css/app.css:
+ *   - oscuro esmeralda por defecto  (--bg #0B0F14 · acento #10B981)
+ *   - variante clara (Trade Republic) en `.light`
+ * color-scheme sincronizado con el tema activo (scrollbars, controles, selects).
+ */
+:root {
+  color-scheme: dark;
+  --oc-bg: #0B0F14;
+  --oc-surface: #131A24;
+  --oc-surface2: #0B0F14;
+  --oc-border: #1E2430;
+  --oc-border2: #2C3442;
+  --oc-text1: #F2F5F9;
+  --oc-text2: #9AA6B4;
+  --oc-text3: #677180;
+  --oc-accent: #10B981;
+  --oc-accent-ink: #04120D;
+  --oc-green: #10B981;
+  --oc-red: #F87171;
+  --oc-orange: #FBBF24;
+  --oc-code-bg: #0E1420;
+  --oc-code-fg: #E6EDF6;
+  --oc-canvas: var(--oc-bg);
+  --oc-panel: var(--oc-surface);
+  --oc-line: var(--oc-border);
+  --oc-ink: var(--oc-text1);
+  --oc-muted: var(--oc-text3);
+  --oc-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.light {
+  color-scheme: light;
+  --oc-bg: #F7F8FA;
+  --oc-surface: #FFFFFF;
+  --oc-surface2: #F0F2F5;
+  --oc-border: #E4E7EC;
+  --oc-border2: #CDD1D8;
+  --oc-text1: #0B0F14;
+  --oc-text2: #3A4555;
+  --oc-text3: #6B7484;
+  --oc-accent: #059669;
+  --oc-accent-ink: #FFFFFF;
+  --oc-green: #059669;
+  --oc-red: #E5484D;
+  --oc-orange: #F59E0B;
+  --oc-code-bg: #0E1420;
+  --oc-code-fg: #E6EDF6;
+  --oc-canvas: var(--oc-bg);
+  --oc-panel: var(--oc-surface);
+  --oc-line: var(--oc-border);
+  --oc-ink: var(--oc-text1);
+  --oc-muted: var(--oc-text3);
+}
+
+body {
+  margin: 0;
+  background: var(--oc-bg);
+  color: var(--oc-ink);
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Primitivas estáticas (fallback para uso directo sin Tailwind) */
+.border-line { border-color: var(--oc-border); }
+.border-line2 { border-color: var(--oc-border2); }
+.bg-panel { background-color: var(--oc-surface); }
+.bg-panel2 { background-color: var(--oc-surface2); }
+.bg-canvas { background-color: var(--oc-bg); }
+.text-ink { color: var(--oc-text1); }
+.text-ink2 { color: var(--oc-text2); }
+.text-muted { color: var(--oc-text3); }
+
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--oc-bg);
+  color: var(--oc-text1);
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(16, 185, 129, 0.18);
+}
+
+/* Mono solo en bloques de código */
+code,
+pre,
+.oc-mono {
+  font-family: var(--oc-mono);
+}
+
+/* Selects y desplegables nativos: heredan el tema */
+select {
+  color: var(--oc-text1);
+  background-color: var(--oc-surface);
+  border: 1px solid var(--oc-border2);
+  border-radius: 8px;
+}
+select option {
+  color: var(--oc-text1);
+  background-color: var(--oc-surface);
+}
+
+/* Tarjeta base corporativa */
+.oc-card {
+  background: var(--oc-surface);
+  border: 1px solid var(--oc-border);
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+/* Scrollbar sutil, sigue el tema vía color-scheme */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--oc-line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--oc-line);
+  border-radius: 999px;
+}
+
+/* Markdown del chat */
+.oc-markdown p {
+  margin: 0 0 12px;
+  line-height: 1.65;
+}
+.oc-markdown p:last-child {
+  margin-bottom: 0;
+}
+.oc-markdown pre {
+  background: var(--oc-code-bg);
+  border: 1px solid var(--oc-border);
+  border-radius: 8px;
+  padding: 16px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.oc-markdown :not(pre) > code {
+  background: var(--oc-surface);
+  border: 1px solid var(--oc-border);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+.oc-markdown ul,
+.oc-markdown ol {
+  padding-left: 20px;
+  margin: 0 0 12px;
+  line-height: 1.65;
+}
+.oc-markdown h1,
+.oc-markdown h2,
+.oc-markdown h3 {
+  font-weight: 600;
+  margin: 16px 0 8px;
+}
+.oc-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+  margin: 12px 0;
+}
+.oc-markdown th,
+.oc-markdown td {
+  border: 1px solid var(--oc-line);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+/* Bloques de código del panel Artifact (sigue el tema) */
+.oc-codeblock {
+  background: var(--oc-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.oc-codeblock .token.comment,
+.oc-codeblock .token.prolog,
+.oc-codeblock .token.doctype,
+.oc-codeblock .token.cdata {
+  color: var(--oc-muted);
+  font-style: italic;
+}
+.oc-codeblock .token.punctuation,
+.oc-codeblock .token.tag,
+.oc-codeblock .token.selector,
+.oc-codeblock .token.attr-name {
+  color: var(--oc-ink);
+}
+.oc-codeblock .token.keyword,
+.oc-codeblock .token.atrule,
+.oc-codeblock .token.rule {
+  color: var(--oc-ink);
+  font-weight: 600;
+}
+.oc-codeblock .token.string,
+.oc-codeblock .token.attr-value,
+.oc-codeblock .token.char {
+  color: var(--oc-success);
+}
+.oc-codeblock .token.function,
+.oc-codeblock .token.class-name {
+  color: var(--oc-ink);
+  font-weight: 500;
+}
+.oc-codeblock .token.number,
+.oc-codeblock .token.boolean {
+  color: var(--oc-ink);
+}
+.oc-codeblock .token.operator {
+  color: var(--oc-muted);
+}
+
+/* Sliders sobrios (siguen el tema) */
+.oc-range {
+  accent-color: var(--oc-accent);
+  height: 20px;
+  cursor: pointer;
+}
+
+/* Barra de progreso indeterminada (pull sin totales) */
+@keyframes oc-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+.oc-indeterminate {
+  animation: oc-slide 1.2s ease-in-out infinite;
+}
+
+/* Animación de streaming: cursor parpadeante sobrio */
+@keyframes oc-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+.oc-caret {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  background: var(--oc-accent);
+  border-radius: 2px;
+  vertical-align: -3px;
+  margin-left: 2px;
+  animation: oc-blink 1s infinite;
+}
+
+@keyframes oc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.oc-spin {
+  animation: oc-spin 0.9s linear infinite;
+}
+
+/* ── Studio y modo foco (fase 3) ─────────────────────────────────── */
+.i-max {
+  max-width: 860px;
+}
+
+.artifact-full {
+  inset: 0;
+  height: 100dvh;
+}
+
+.pane-code {
+  background: var(--oc-panel);
+}
+
+.pane-code pre {
+  line-height: 1.6;
+}
+
+.src-chips {
+  align-items: center;
+}
+
+.scroll-lock {
+  overscroll-behavior: contain;
+}
+
+.w-cards {
+  align-items: center;
+}
+
+.w-cards:focus-within {
+  outline: 1px solid var(--oc-line);
+  outline-offset: 3px;
+}
+
+.focus-mode aside {
+  display: none;
+}
+
+.focus-mode .oc-focus-hide {
+  display: none;
+}
+
+.focus-mode main {
+  padding: 2rem 2.5rem;
+}
+
+.focus-within {
+  position: relative;
+}
+
+.focus-within:focus-within {
+  box-shadow: 0 0 0 2px var(--oc-line);
+}
+
+.oc-md p { margin: 0.25rem 0; }
+.oc-md h1, .oc-md h2, .oc-md h3, .oc-md h4 {
+  font-weight: 600; margin: 0.75rem 0 0.25rem;
+}
+.oc-md ul, .oc-md ol { list-style: disc; margin: 0.25rem 0 0.25rem 1.25rem; }
+.oc-md ol { list-style: decimal; }
+.oc-md code { font-family: var(--oc-mono); font-size: 0.8em; background: var(--oc-surface); border-radius: 4px; padding: 0.1em 0.35em; }
+.oc-md pre {
+  background: var(--oc-code-bg); border: 1px solid var(--oc-border); border-radius: 6px;
+  padding: 0.6rem; overflow-x: auto; font-size: 0.82rem; line-height: 1.45;
+}
+.oc-md pre code { background: transparent; padding: 0; }
+.oc-md a { color: var(--oc-accent); text-decoration: underline; }
+.oc-md blockquote { border-left: 3px solid var(--oc-accent); padding-left: 0.75rem; color: var(--oc-text3); margin: 0.5rem 0; }

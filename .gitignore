@@ -1,0 +1,7 @@
+node_modules/
+__pycache__/
+workspace/
+static/
+.venv/
+.DS_Store
+.env

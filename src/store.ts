@@ -1,0 +1,276 @@
+// Zustand: estado global ligero para el streaming de misiones, navegación y tema.
+
+import { create } from 'zustand'
+import { persist, createJSONStorage } from 'zustand/middleware'
+import { api, fetchWithAuth } from './api'
+import { parseSse } from './sse'
+import type { StudioTarget } from './features'
+import { convertTranscript } from './mission'
+
+
+export interface QueuedItem {
+  id: string
+  text: string
+  payload: Record<string, unknown>
+}
+
+export interface MissionEvent {
+  id: number
+  name: string
+  data: Record<string, unknown>
+  at: number
+}
+
+interface UiState {
+  view: string
+  taskId: string | null
+  mission: MissionEvent[]
+  streaming: boolean
+  missionQueue: QueuedItem[]
+  missionError: string | null
+  studio: StudioTarget | null
+  pendingPerm: { id: string; tool: string; title: string } | null
+  focus: boolean
+  composerDraft: string
+  theme: 'dark' | 'light'
+  model: string
+  artifactsOpen: boolean
+  loopMode: boolean
+  maxRounds: number
+  hacker: boolean
+  totalTokens: number
+  tokensPerSec: number
+  setView: (v: string) => void
+  toggleTheme: () => void
+  setModel: (m: string) => void
+  setArtifactsOpen: (open: boolean) => void
+  setLoopMode: (v: boolean) => void
+  setMaxRounds: (n: number) => void
+  setHacker: (v: boolean) => void
+  enqueueMission: (text: string, payload: Record<string, unknown>) => void
+  dequeueMission: (id: string) => void
+  startMission: (payload: Record<string, unknown>) => Promise<void>
+  stopMission: (abort: boolean) => void
+  clearMission: () => void
+  openStudio: (t: StudioTarget) => void
+  closeStudio: () => void
+  toggleFocus: () => void
+  setComposerDraft: (d: string) => void
+  clearComposerDraft: () => void
+  approvePerm: (id: string, allow: boolean) => Promise<void>
+}
+
+let seq = 0
+let controller: AbortController | null = null
+
+// Ventana deslizante para el cálculo de tokens/segundo en tiempo real (fuentas
+// de tiempo de cada token emitido por el modelo). No se persiste.
+let tokTimes: number[] = []
+const RATE_WINDOW_MS = 3000
+
+// Marca el tiempo de llegada de un token (barato). El total/tps reales se
+// calculan al COMMITTEAR el lote, no por token (ver startMission).
+function pushTokenTime(): void {
+  const now = Date.now()
+  tokTimes.push(now)
+  while (tokTimes.length && now - tokTimes[0] > RATE_WINDOW_MS) tokTimes.shift()
+}
+
+export const useUi = create<UiState>()(
+  persist(
+    (set, get) => ({
+      view: 'misiones',
+      taskId: null,
+      mission: [],
+      streaming: false,
+      missionQueue: [],
+      missionError: null,
+      studio: null,
+      pendingPerm: null,
+      focus: false,
+      composerDraft: '',
+      theme: 'dark',
+      model: 'qwen3.5:4b',
+      artifactsOpen: true,
+      loopMode: false,
+      maxRounds: 8,
+      hacker: false,
+      totalTokens: 0,
+      tokensPerSec: 0,
+      setView: (v) => set({ view: v }),
+      clearMission: () => {
+        tokTimes = []
+        set({ mission: [], taskId: null, missionQueue: [], missionError: null, totalTokens: 0, tokensPerSec: 0 })
+      },
+      enqueueMission: (text, payload) => {
+        const item: QueuedItem = {
+          id: Math.random().toString(36).slice(2, 9),
+          text,
+          payload,
+        }
+        set((s) => ({ missionQueue: [...s.missionQueue, item] }))
+      },
+      dequeueMission: (id) => {
+        set((s) => ({ missionQueue: s.missionQueue.filter((q) => q.id !== id) }))
+      },
+      toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
+      setModel: (m) => set({ model: m }),
+      setArtifactsOpen: (open) => set({ artifactsOpen: open }),
+      setLoopMode: (v) => set({ loopMode: v }),
+      setMaxRounds: (n) => set({ maxRounds: n }),
+      setHacker: (v) => set({ hacker: v }),
+      openStudio: (t) => set({ studio: t }),
+      closeStudio: () => set({ studio: null }),
+      toggleFocus: () => set((s) => ({ focus: !s.focus })),
+      setComposerDraft: (d) => set({ composerDraft: d }),
+      clearComposerDraft: () => set({ composerDraft: '' }),
+      approvePerm: async (id, allow) => {
+        set({ pendingPerm: null })
+        await fetchWithAuth('/api/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, allow }),
+        })
+      },
+      stopMission: (abort: boolean) => {
+        if (controller) {
+          if (abort && get().taskId) api.abort(get().taskId!).catch(() => undefined)
+          controller.abort()
+        }
+        set({ streaming: false })
+      },
+      startMission: async (payload) => {
+        get().stopMission(false)
+        controller = new AbortController()
+        // 🧵 continuidad: si el payload continúa un hilo existente, NO vaciamos
+        // la vista — prefijamos la misión con el transcript previo y luego
+        // iremos haciendo APPEND de los eventos SSE del nuevo turno. Así las
+        // burbujas anteriores se conservan y el nuevo mensaje sigue debajo.
+        const contTask =
+          typeof payload.continue_task === 'string' && payload.continue_task
+            ? payload.continue_task
+            : get().taskId
+        const keepOngoing = Boolean(contTask) && get().mission.length > 0
+        if (keepOngoing) {
+          try {
+            const detail = await api.historyDetail(contTask!)
+            const pref = convertTranscript(detail)
+            set({ taskId: contTask, mission: pref, streaming: true, missionError: null })
+          } catch {
+            set({ mission: [], taskId: contTask, streaming: true, missionError: null })
+          }
+        } else {
+          set({ mission: [], taskId: null, streaming: true, missionError: null })
+        }
+        const res = await fetchWithAuth('/api/task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        })
+        if (!res.ok || !res.body) {
+          let msg = `HTTP ${res.status}`
+          try {
+            const b = await res.json()
+            msg = b.detail ?? msg
+          } catch {
+            /* noop */
+          }
+          set({ streaming: false, missionError: msg })
+          return
+        }
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        // 📦 Lote de eventos SSE pendiente: los frames de `token` llegan a
+        // decenas por segundo; commitear cada uno por separado dispara una
+        // tormenta de re-renders y congela la pestaña con misiones largas.
+        // Aquí se acumulan y se vuelcan al store 1x cada FLUSH_MS con un único
+        // set() (mission + contadores juntos).
+        const pending: ReturnType<typeof parseSse> = []
+        let tokAcc = 0
+        const enqueue = (parsed: ReturnType<typeof parseSse>) => {
+          for (const ev of parsed) {
+            if (ev.name === 'session_id') {
+              const tid = ev.data['task_id'] as string | undefined
+              if (tid) set({ taskId: tid })
+              continue
+            }
+            if (ev.name === 'perm_request') {
+              set({ pendingPerm: ev.data as any })
+              continue
+            }
+            if (ev.name === 'token') {
+              pushTokenTime()
+              tokAcc++
+            }
+            pending.push(ev)
+          }
+        }
+        const commit = () => {
+          if (pending.length === 0 && tokAcc === 0) return
+          const evs = pending.splice(0, pending.length)
+          const n = tokAcc
+          tokAcc = 0
+          set((s) => ({
+            mission: [...s.mission, ...evs.map((e) => ({ ...e, id: ++seq, at: Date.now() }))],
+            totalTokens: s.totalTokens + n,
+            tokensPerSec: Math.round((tokTimes.length / RATE_WINDOW_MS) * 1000),
+          }))
+        }
+        const flusher = setInterval(commit, 80)
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            let idx: number
+            while ((idx = buffer.indexOf('\n\n')) !== -1) {
+              const frame = buffer.slice(0, idx)
+              buffer = buffer.slice(idx + 2)
+              enqueue(parseSse(frame))
+            }
+          }
+        } catch {
+          /* aborted */
+        } finally {
+          clearInterval(flusher)
+          commit()
+          controller = null
+          set({ streaming: false })
+
+          // 📥 Procesar siguiente mensaje de la cola de espera si existe
+          const queue = get().missionQueue
+          if (queue.length > 0) {
+            const next = queue[0]
+            set({ missionQueue: queue.slice(1) })
+            setTimeout(() => {
+              void get().startMission({
+                ...next.payload,
+                continue_task: get().taskId || undefined,
+              })
+            }, 100)
+          }
+        }
+      },
+    }),
+    {
+      name: 'otter-storage',
+      version: 1,
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        taskId: state.taskId,
+        mission: state.mission,
+        theme: state.theme,
+        model: state.model,
+        artifactsOpen: state.artifactsOpen,
+        loopMode: state.loopMode,
+        maxRounds: state.maxRounds,
+        hacker: state.hacker,
+      }),
+    },
+  ),
+)
+
+export const isDoneName = (n: string) =>
+  n === 'task_done' || n === 'task_aborted' || n === 'task_error'

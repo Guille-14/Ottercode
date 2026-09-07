@@ -1,0 +1,33 @@
+// Vista de diff unificado (```diff…```) con colores rojo/verde.
+
+import type { ReactNode } from 'react'
+
+function Row({ children, tone }: { children: ReactNode; tone: 'add' | 'del' | 'hunk' | 'ctx' }) {
+  const cls =
+    tone === 'add'
+      ? 'bg-emerald-500/10 text-emerald-400'
+      : tone === 'del'
+        ? 'bg-rose-500/10 text-rose-400'
+        : tone === 'hunk'
+          ? 'bg-panel text-muted'
+          : 'text-ink/80'
+  return <div className={`px-2 py-px oc-mono text-xs ${cls}`}>{children}</div>
+}
+
+export default function DiffView({ text }: { text: string }) {
+  const fence = /```diff\s*\n([\s\S]*?)```/
+  const m = text.match(fence)
+  const body = (m ? m[1] : text).split('\n')
+  return (
+    <div className="overflow-x-auto rounded-md border border-line bg-canvas py-1">
+      {body.map((l, i) => {
+        const tone = l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : l.startsWith('@@') ? 'hunk' : 'ctx'
+        return (
+          <Row key={i} tone={tone}>
+            {l || ' '}
+          </Row>
+        )
+      })}
+    </div>
+  )
+}
