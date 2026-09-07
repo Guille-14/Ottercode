@@ -66,11 +66,71 @@ def _tool_from_decoded(obj: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+_HERMES_TOOL_RE = re.compile(
+    r"<tool_call>\s*([\s\S]*?)</tool_call>|<function=([A-Za-z0-9_]+)>([\s\S]*?)</function>",
+    re.IGNORECASE,
+)
+
+
+def _hermes_tool_call(text: str) -> Optional[Dict[str, Any]]:
+    """Protocolo Hermes / Nous-Hermes: <tool_call> JSON o <function=name>."""
+    t = text or ""
+    for m in _HERMES_TOOL_RE.finditer(t):
+        body, fname, fargs = m.group(1), m.group(2), m.group(3)
+        if fname:
+            args: Dict[str, Any] = {}
+            raw = (fargs or "").strip()
+            if raw.startswith("{"):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                except Exception:
+                    args = {}
+            else:
+                for line in raw.splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        args[k.strip()] = v.strip().strip('"')
+            if fname.strip():
+                return {"tool": fname.strip(), "arguments": args}
+        blob = (body or "").strip()
+        if not blob:
+            continue
+        try:
+            obj = json.loads(blob)
+        except Exception:
+            obj = {}
+            idx = blob.find("{")
+            if idx != -1:
+                try:
+                    obj, _ = _JSON_DECODER.raw_decode(blob[idx:])
+                except json.JSONDecodeError:
+                    obj = {}
+        call = _coerce_tool_call(obj) if obj else None
+        if call:
+            return call
+        if isinstance(obj, dict) and obj.get("name"):
+            raw_a = obj.get("arguments") or obj.get("parameters") or {}
+            if isinstance(raw_a, str):
+                try:
+                    raw_a = json.loads(raw_a)
+                except Exception:
+                    raw_a = {}
+            if not isinstance(raw_a, dict):
+                raw_a = {}
+            return {"tool": str(obj["name"]).strip(), "arguments": raw_a}
+    return None
+
+
 def _looks_like_tool_attempt(text: str) -> bool:
-    """Heurística: el agente intentó emitir un JSON de skill pero no fue parseable."""
-    if not (re.search(r'"tool"\s*:', text) or re.search(r'"tool_name"\s*:', text)):
+    """Heurística: el agente intentó emitir un JSON/XML de skill pero no fue parseable."""
+    t = text or ""
+    if "<tool_call>" in t.lower() or "<function=" in t.lower():
+        return True
+    if not (re.search(r'"tool"\s*:', t) or re.search(r'"tool_name"\s*:', t)):
         return False
-    return any(name in text for name in tools.TOOL_NAMES + ("finalizar",))
+    return any(name in t for name in tools.TOOL_NAMES + ("finalizar",))
 
 
 def extract_json_object(text: str) -> Optional[Dict[str, Any]]:

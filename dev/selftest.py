@@ -1901,6 +1901,26 @@ def main() -> int:
         check("T47j UI: contador de tokens (tokenStats/tok/s) en el bundle",
               "tokenStats" in js47j and "tok/s" in js47j and "totalTokens" in js47j, "")
 
+        print("\n🦦 T48: Hermes XML tools + schemas Ollama + RAG en Otter…")
+        hx = backend_mod.extract_tool_call(
+            '<tool_call>{"name": "read_file", "arguments": {"filepath": "a.py"}}</tool_call>')
+        hy = backend_mod.extract_tool_call(
+            '<function=write_file>\nfilepath=index.html\ncontent=hola\n</function>')
+        check("T48a extract_tool_call acepta Hermes <tool_call> y <function=>",
+              hx and hx.get("tool") == "read_file" and hx.get("arguments", {}).get("filepath") == "a.py"
+              and hy and hy.get("tool") == "write_file", str(hx))
+        schemas = tools_mod.get_ollama_tools()
+        rf = next((t for t in schemas if t["function"]["name"] == "read_file"), {})
+        check("T48b get_ollama_tools incluye properties reales (filepath)",
+              bool(rf.get("function", {}).get("parameters", {}).get("properties", {}).get("filepath")),
+              str(rf)[:160])
+        otter48 = backend_mod.get_agent("agent")
+        check("T48c Otter tiene semantic_search + index_workspace (RAG local)",
+              "semantic_search" in otter48.tools_disponibles
+              and "index_workspace" in otter48.tools_disponibles, "")
+        check("T48d LLM_BACKEND no se pisa con URL de OTTERCODE_API",
+              backend_mod.LLM_BACKEND in ("ollama", "openai"), backend_mod.LLM_BACKEND)
+
     finally:
         for p in (p_api, p_mock):
             try:

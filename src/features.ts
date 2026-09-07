@@ -89,6 +89,8 @@ export function stripToolJson(buf: string): string {
     const close = s.indexOf('```', idx + 7)
     s = close !== -1 ? s.slice(0, idx) + s.slice(close + 3) : s.slice(0, idx)
   }
+  s = s.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+  s = s.replace(/<function=[^>]+>[\s\S]*?<\/function>/gi, '')
   return s
 }
 

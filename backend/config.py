@@ -95,9 +95,19 @@ import tools
 
 OLLAMA_BASE_URL = os.environ.get("OTTERCODE_OLLAMA", "http://localhost:11434")
 DEFAULT_MODEL = os.environ.get("OTTERCODE_MODEL", "qwen3.8-distill-64k")
-# Transporte LLM: "ollama" (API nativa, con keep_alive/VRAM-flush) | "openai"
-# (compatible OpenAI: MLC Chat en el móvil, llama.cpp en modo OpenAI, LM Studio…)
-LLM_BACKEND = os.environ.get("OTTERCODE_API", "ollama").strip().lower()
+# Transporte LLM: "ollama" | "openai". OTTERCODE_API es la URL del propio backend
+# (ver README); no debe usarse como selector de transporte.
+def _resolve_llm_backend() -> str:
+    explicit = os.environ.get("OTTERCODE_LLM_BACKEND", "").strip().lower()
+    if explicit in ("ollama", "openai"):
+        return explicit
+    raw = os.environ.get("OTTERCODE_API", "ollama").strip().lower()
+    if raw in ("ollama", "openai"):
+        return raw
+    return "ollama"
+
+
+LLM_BACKEND = _resolve_llm_backend()
 WORKSPACE_ROOT = Path(
     os.environ.get("OTTERCODE_WORKSPACE", str(Path(__file__).resolve().parent.parent / "workspace"))
 )

@@ -129,7 +129,7 @@ BASE_AGENT: str = (
     "=== AGENTE OTTER — MODO CLAUDE CODE ===\n"
     "Eres Otter, un agente ingeniero de software senior trabajando DIRECTAMENTE "
     "con el usuario sobre su workspace. No hay más agentes: tú lo haces todo.\n\n"
-    "FORMA DE TRABAJAR (estilo Claude Code):\n"
+    "FORMA DE TRABAJAR (estilo Claude Code × Hermes):\n"
     "1. Antes de editar, LEE: list_dir/tree para orientarte, read_file para ver "
     "el contenido exacto. Nunca adivines lo que hay en un archivo.\n"
     "2. Escribe con write_file (archivo nuevo o reescritura completa). Archivos "
@@ -229,7 +229,8 @@ CORE_AGENTS: Dict[str, Agent] = {
              "csv_peek", "json_query", "todo_write", "todo_read",
              "http_request", "web_search", "web_fetch", "sys_info",
              "hash_text", "base64_code", "uuid_gen", "pypi_info", "npm_search",
-             "ollama_consult", "vault_read", "vault_write", "finalizar"]),
+             "ollama_consult", "vault_read", "vault_write",
+             "semantic_search", "index_workspace", "finalizar"]),
         icon="🦦", color_neon="#22d3ee",
         tools_disponibles=[
             "read_file", "write_file", "append_file", "edit_file", "mkdir",
@@ -238,7 +239,8 @@ CORE_AGENTS: Dict[str, Agent] = {
             "csv_peek", "json_query", "todo_write", "todo_read",
             "http_request", "web_search", "web_fetch", "sys_info",
             "hash_text", "base64_code", "uuid_gen", "pypi_info", "npm_search",
-            "ollama_consult", "vault_read", "vault_write", "finalizar"],
+            "ollama_consult", "vault_read", "vault_write",
+            "semantic_search", "index_workspace", "finalizar"],
     ),
     "architect": Agent(
         id="architect", nombre="El Arquitecto", rol="Agente Principal · Planner",
@@ -575,6 +577,5 @@ def normalize_agent_profile(obj: Dict[str, Any], agent_id: str,
 # ---------------------------------------------------------------------------
 # Utilidades SSE
 # ---------------------------------------------------------------------------
-
 
 

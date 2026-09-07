@@ -399,6 +399,13 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                                 "tool_call_id": call.get("id"),
                                 "content": str(event.get("output", ""))
                             })
+                            if event.get("ok") and event["name"] in _WRITE_TOOLS:
+                                run._files_ever_written = True
+                            if not isinstance(getattr(run, "_turn_tools", None), set):
+                                run._turn_tools = set()
+                            run._turn_tools.add(event["name"])
+                # Native FC ya ejecutó las tools: no reparsear JSON/Hermes (doble dispatch).
+                continue
 
         run.transcript.append(
             {"kind": "agent", "agent": agent_id, "iteration": iteration, "text": parse_text}

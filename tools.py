@@ -1691,7 +1691,15 @@ class ToolExecutor:
         canonical = resolve_name(tool)
         try:
             if canonical == "read_file":
-                output = self.read_file(args.get("filepath", ""))
+                try:
+                    _off = int(args.get("offset") or 1)
+                except (TypeError, ValueError):
+                    _off = 1
+                output = self.read_file(
+                    args.get("filepath", ""),
+                    offset=_off,
+                    limit=args.get("limit") or args.get("max_lines"),
+                )
             elif canonical == "write_file":
                 output = self.write_file(args.get("filepath", ""), args.get("content", ""))
             elif canonical == "append_file":
@@ -1951,10 +1959,36 @@ if __name__ == "__main__":  # sanity check manual
         print(ro.dispatch("write_file", {"filepath": "x.txt", "content": "x"}))
         print(ro.dispatch("python_exec", {"code": "print(1)"}))
 
+_TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
+    "read_file": {"filepath": "string", "offset": "integer", "limit": "integer"},
+    "write_file": {"filepath": "string", "content": "string"},
+    "append_file": {"filepath": "string", "content": "string"},
+    "edit_file": {"filepath": "string", "old_string": "string", "new_string": "string"},
+    "mkdir": {"path": "string"},
+    "list_dir": {"path": "string"},
+    "tree": {"path": "string", "max_depth": "integer"},
+    "execute_bash": {"cmd": "string"},
+    "python_exec": {"code": "string"},
+    "web_search": {"query": "string"},
+    "web_fetch": {"url": "string"},
+    "grep_search": {"pattern": "string", "path": "string"},
+    "glob_files": {"pattern": "string"},
+    "http_request": {"url": "string", "method": "string", "body": "string"},
+    "semantic_search": {"query": "string", "top_k": "integer"},
+    "todo_write": {"todos": "array"},
+    "git_diff": {"staged": "boolean"},
+    "git_log": {"max": "integer"},
+}
+
+
 def get_ollama_tools() -> List[Dict[str, Any]]:
-    """Convierte el registro de TOOLS al formato de herramientas de Ollama."""
+    """Esquema OpenAI/Ollama con propiedades reales (Hermes + native FC)."""
     ollama_tools = []
     for name, info in TOOLS.items():
+        props = {
+            k: {"type": t} for k, t in (_TOOL_SCHEMAS.get(name) or {}).items()
+        }
+        required = [k for k in props if k in ("filepath", "content", "cmd", "query", "url", "pattern", "code")]
         ollama_tools.append({
             "type": "function",
             "function": {
@@ -1962,9 +1996,9 @@ def get_ollama_tools() -> List[Dict[str, Any]]:
                 "description": info.get("desc", ""),
                 "parameters": {
                     "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
+                    "properties": props,
+                    "required": required,
+                },
+            },
         })
     return ollama_tools

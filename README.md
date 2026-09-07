@@ -38,7 +38,8 @@ Abre `http://127.0.0.1:8099`.
 | Variable | Valor por defecto | Uso |
 | --- | --- | --- |
 | `OTTERCODE_OLLAMA` | `http://127.0.0.1:11434` | Base de Ollama |
-| `OTTERCODE_API` | `http://127.0.0.1:8099` | Base del propio backend (SSE) |
+| `OTTERCODE_API` | `http://127.0.0.1:8099` | Base del propio backend (SSE). No selecciona el transporte LLM. |
+| `OTTERCODE_LLM_BACKEND` | `ollama` | Transporte: `ollama` o `openai` |
 | `OTTERCODE_MODEL` | `qwen3:4b` | Modelo por defecto |
 | `OTTERCODE_TOKEN` | — | Si se define, activa autenticación con token |
 | `OTTERCODE_FLUSH_TIMEOUT` | `60` | Timeout del flush de VRAM |
