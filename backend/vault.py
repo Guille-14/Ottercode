@@ -29,15 +29,39 @@ _VAULT_SKIP_DIRS = {".obsidian", ".trash", ".git", "node_modules"}
 _VAULT_MAX_NOTES = 400
 
 
+def default_vault_dir() -> Path:
+    """Vault persistente fuera de /tmp: ~/.ottercode/vault o %APPDATA%/OtterCode/vault."""
+    if os.name == "nt":
+        root = Path(os.environ.get("APPDATA") or Path.home()) / "OtterCode"
+    else:
+        root = Path.home() / ".ottercode"
+    vault = root / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+    return vault
+
+
 def _load_vault_cfg() -> None:
-    """Al arrancar: si hay vault guardado, actívalo como OTTERCODE_VAULT."""
+    """Al arrancar: vault persistente. Ignora rutas /tmp (se pierden al reiniciar)."""
+    if os.environ.get("OTTERCODE_VAULT", "").strip():
+        return
+    path = ""
     try:
         cfg = json.loads(_VAULT_CFG_PATH.read_text(encoding="utf-8"))
         path = str(cfg.get("path", "")).strip()
-        if path and Path(path).is_dir():
-            os.environ["OTTERCODE_VAULT"] = path
     except (OSError, json.JSONDecodeError):
-        pass
+        path = ""
+    ephemeral = (not path) or path.startswith("/tmp") or path.startswith("/var/tmp")
+    if ephemeral or not Path(path).is_dir():
+        dest = default_vault_dir()
+        try:
+            _VAULT_CFG_PATH.write_text(
+                json.dumps({"path": str(dest)}, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError:
+            pass
+        os.environ["OTTERCODE_VAULT"] = str(dest)
+        return
+    os.environ["OTTERCODE_VAULT"] = path
 
 
 _load_vault_cfg()

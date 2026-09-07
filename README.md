@@ -31,7 +31,7 @@ Abre `http://127.0.0.1:8099`.
 - **MCP**: singleton con event loop propio (soporta stdio y SSE sin cross-loop), `call_tool_sync` para uso desde el loop del agente.
 - **Permisos**: herramientas sensibles requieren aprobación manual en la UI.
 - **Autenticación local**: si `OTTERCODE_TOKEN` está definido, el frontend obtiene un token por loopback y lo inyecta vía `X-Otter-Token`; la API lo verifica con `hmac.compare_digest`.
-- **Tema**: oscuro por defecto (claro con `.light`), token `accent` estable en ambos modos para controles activos legibles.
+- **Tema**: único, claro estilo Trade Republic (sin toggle oscuro).
 
 ## Variables de entorno
 

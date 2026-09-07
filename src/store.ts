@@ -32,7 +32,7 @@ interface UiState {
   pendingPerm: { id: string; tool: string; title: string } | null
   focus: boolean
   composerDraft: string
-  theme: 'dark' | 'light'
+
   model: string
   artifactsOpen: boolean
   loopMode: boolean
@@ -41,7 +41,7 @@ interface UiState {
   totalTokens: number
   tokensPerSec: number
   setView: (v: string) => void
-  toggleTheme: () => void
+
   setModel: (m: string) => void
   setArtifactsOpen: (open: boolean) => void
   setLoopMode: (v: boolean) => void
@@ -89,7 +89,7 @@ export const useUi = create<UiState>()(
       pendingPerm: null,
       focus: false,
       composerDraft: '',
-      theme: 'dark',
+
       model: 'qwen3.5:4b',
       artifactsOpen: true,
       loopMode: false,
@@ -113,7 +113,7 @@ export const useUi = create<UiState>()(
       dequeueMission: (id) => {
         set((s) => ({ missionQueue: s.missionQueue.filter((q) => q.id !== id) }))
       },
-      toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
+
       setModel: (m) => set({ model: m }),
       setArtifactsOpen: (open) => set({ artifactsOpen: open }),
       setLoopMode: (v) => set({ loopMode: v }),
@@ -261,7 +261,7 @@ export const useUi = create<UiState>()(
       partialize: (state) => ({
         taskId: state.taskId,
         mission: state.mission,
-        theme: state.theme,
+
         model: state.model,
         artifactsOpen: state.artifactsOpen,
         loopMode: state.loopMode,

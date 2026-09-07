@@ -476,6 +476,7 @@ def api_model_show(req: ModelNameRequest) -> Dict[str, Any]:
 
 @router.get(Route.SKILLS)
 def api_skills() -> Dict[str, Any]:
+    from backend.md_skills import list_md_skills
     disabled = set(_load_skills_cfg().get("disabled", []))
     skills = []
     for name, meta in tools.TOOLS.items():
@@ -485,6 +486,16 @@ def api_skills() -> Dict[str, Any]:
             "desc": meta.get("desc", ""),
             "writes_fs": bool(meta.get("writes_fs")),
             "enabled": name not in disabled,
+            "kind": "tool",
+        })
+    for md in list_md_skills():
+        skills.append({
+            "name": md["name"],
+            "cat": md["cat"],
+            "desc": md["desc"],
+            "writes_fs": False,
+            "enabled": md["enabled"],
+            "kind": "markdown",
         })
     skills.sort(key=lambda sk: (sk["cat"], sk["name"]))
     return {"skills": skills, "disabled": sorted(disabled)}
@@ -497,11 +508,13 @@ class SkillToggleRequest(BaseModel):
 
 @router.post(Route.SKILLS_CONFIG)
 def api_skills_config(req: SkillToggleRequest) -> Dict[str, Any]:
+    from backend.md_skills import md_skill_names
     canonical = tools.resolve_name(req.tool.strip())
-    if canonical not in tools.TOOLS:
+    if canonical not in tools.TOOLS and req.tool.strip() not in md_skill_names():
         raise HTTPException(status_code=400, detail=f"Skill desconocida: {req.tool}")
-    set_skill_enabled(canonical, req.enabled)
-    return {"ok": True, "tool": canonical, "enabled": req.enabled}
+    name = canonical if canonical in tools.TOOLS else req.tool.strip()
+    set_skill_enabled(name, req.enabled)
+    return {"ok": True, "tool": name, "enabled": req.enabled}
 
 
 # --------------------------- AGENTES DINÁMICOS ------------------------------

@@ -57,6 +57,7 @@ export interface Skill {
   desc: string
   writes_fs: boolean
   enabled: boolean
+  kind?: string
 }
 
 export interface SkillsResponse {

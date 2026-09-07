@@ -41,6 +41,12 @@ def init_db() -> None:
             created_at TEXT DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agente_id TEXT,
+            contenido TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        );
     """)
     # FTS5 virtual table (si no existe)
     try:

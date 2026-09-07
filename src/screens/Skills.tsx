@@ -46,7 +46,7 @@ export default function Skills() {
           <div>
             <h1 className="text-lg font-semibold tracking-tight">Skills</h1>
             <p className="text-xs text-muted">
-              Activa las herramientas que los agentes pueden usar durante las misiones.
+              Herramientas del sistema y skills markdown en backend/skills/*.md. Las activas se inyectan en el system prompt.
             </p>
           </div>
         </div>

@@ -24,7 +24,7 @@ from backend.runtime import *  # noqa: F401,F403  (hen ATIVITY, ACTIVE_RUN)
 from backend.runtime import _force_stop_run, _activity_set, _activity_finish  # noqa
 from backend.history import *  # noqa: F401,F403
 from backend.vault import _memory_finish, _memory_recall, memory_note_for_run  # noqa
-from backend.memory import get_memory  # noqa
+from backend.memory import get_memory, harvest_memory  # noqa
 
 
 
@@ -218,6 +218,10 @@ def run_simple_agent(
     text, _stats = yield from stream_llm(run, agent_id, system_prompt, prompt)  # type: ignore[misc]
     run.transcript.append({"kind": "agent", "agent": agent_id, "iteration": iteration, "text": text})
     yield sse(SseEvent.agent_end, {"agent": agent_id, "iteration": iteration})
+    try:
+        harvest_memory(run, agent_id, text)
+    except Exception:
+        pass
     return text  # type: ignore[return-value]
 
 
@@ -311,6 +315,10 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
     mem = get_memory()
     if mem:
         system_prompt = system_prompt + "\n\n# 🧠 MEMORIA APRENDIDA (CONTEXTO A LARGO PLAZO)\n" + mem
+    from backend.md_skills import active_skill_prompt
+    _sk = active_skill_prompt()
+    if _sk:
+        system_prompt = system_prompt + "\n\n# SKILLS ACTIVAS (markdown)\n" + _sk
     
     _activity_set(agent=agent_id, agent_nombre=meta.get("nombre", ""),
                   agent_icon=meta.get("icon", ""), iteration=iteration,
@@ -608,7 +616,12 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         })
 
     yield sse(SseEvent.agent_end, {"agent": agent_id, "iteration": iteration, "steps": steps})
-    return _strip_think(last_text)  # type: ignore[return-value]
+    cleaned = _strip_think(last_text)
+    try:
+        harvest_memory(run, agent_id, cleaned)
+    except Exception:
+        pass
+    return cleaned  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -1314,5 +1327,4 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
             save_session_to_db(run) # FASE 2 · SQLite + FTS5
         except Exception as _e:  # noqa: BLE001
             print(f"[WARN] Persistencia fallida para {run.task_id}: {_e}", flush=True)
-
 

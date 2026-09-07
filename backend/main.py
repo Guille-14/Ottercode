@@ -121,8 +121,8 @@ def mobile_manifest() -> JSONResponse:
         "scope": "/m",
         "display": "standalone",
         "orientation": "portrait",
-        "background_color": "#04070c",
-        "theme_color": "#070c14",
+        "background_color": "#FFFFFF",
+        "theme_color": "#FFFFFF",
         "lang": "es",
         "icons": [
             {"src": "/m/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},

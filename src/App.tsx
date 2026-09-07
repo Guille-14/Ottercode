@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import {
   MessageSquare, Users, Box, Wrench, Plus, Search, Trash2,
-  Sun, Moon, Bell, Menu, Activity, Focus, Bot, Settings, Zap, Hash,
+  Bell, Menu, Activity, Focus, Bot, Settings, Zap, Hash,
 } from 'lucide-react'
 import Estado from './screens/Estado'
 import Misiones from './screens/Misiones'
@@ -59,8 +59,6 @@ export default function App() {
   const closeStudio = useUi((s) => s.closeStudio)
   const openStudio = useUi((s) => s.openStudio)
   const clearMission = useUi((s) => s.clearMission)
-  const theme = useUi((s) => s.theme)
-  const toggleTheme = useUi((s) => s.toggleTheme)
   const artifactsOpen = useUi((s) => s.artifactsOpen)
   const setArtifactsOpen = useUi((s) => s.setArtifactsOpen)
   const taskId = useUi((s) => s.taskId)
@@ -72,12 +70,6 @@ export default function App() {
   const [hideLogs, setHideLogs] = useState(false)
   const [history, setHistory] = useState<HistorySession[]>([])
   const [search, setSearch] = useState('')
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('light', theme === 'light')
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'light' ? '#F7F8FA' : '#0B0F14')
-    document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', theme === 'light' ? 'light' : 'dark')
-  }, [theme])
 
   const loadHistory = async (q = '') => {
     try {
@@ -260,14 +252,6 @@ export default function App() {
             <Focus className="h-4 w-4" />
             <span>Modo foco</span>
           </button>
-          <button
-            type="button"
-            onClick={toggleTheme}
-            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-canvas hover:text-ink"
-          >
-            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            <span>{theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}</span>
-          </button>
           <p className="px-2.5 pt-1 text-[10px] text-muted">motor FastAPI · Ollama local</p>
         </div>
       </aside>
@@ -293,14 +277,6 @@ export default function App() {
               title="Permitir notificaciones"
             >
               <Bell className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="rounded-lg p-1.5 text-muted hover:bg-panel hover:text-ink"
-              title="Cambiar tema"
-            >
-              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
           </div>
         </header>

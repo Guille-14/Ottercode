@@ -1921,6 +1921,26 @@ def main() -> int:
         check("T48d LLM_BACKEND no se pisa con URL de OTTERCODE_API",
               backend_mod.LLM_BACKEND in ("ollama", "openai"), backend_mod.LLM_BACKEND)
 
+        print("\n🧾 T49: C1-C4 tema claro · memoria SQLite · skills md · vault persistente…")
+        _, js49, css49 = _assets()
+        check("T49a CSS: paleta Trade Republic en :root, sin .light/.dark",
+              "--oc-bg: #FFFFFF" in css49 and "--oc-accent: #18181B" in css49
+              and ".light {" not in css49 and ".dark {" not in css49
+              and "toggleTheme" not in js49, "")
+        from backend.memory import add_memory, get_memory as gm
+        add_memory("Prefiere TypeScript y UIs claras", agente_id="agent")
+        rec = gm()
+        check("T49b memoria SQLite roundtrip (sin editar ficheros a mano)",
+              "TypeScript" in rec, rec[:120])
+        rsk = requests.get(f"{API}/api/skills")
+        names49 = [s["name"] for s in rsk.json().get("skills", [])] if rsk.ok else []
+        check("T49c skill markdown tono-directo listada en /api/skills",
+              rsk.ok and "tono-directo" in names49, str(names49[-8:]))
+        import backend.vault as vault_mod
+        d49 = vault_mod.default_vault_dir()
+        check("T49d vault por defecto fuera de /tmp (~/.ottercode o APPDATA)",
+              "/tmp" not in str(d49) and d49.is_dir(), str(d49))
+
     finally:
         for p in (p_api, p_mock):
             try:
