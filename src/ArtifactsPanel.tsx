@@ -88,6 +88,7 @@ export default function ArtifactsPanel() {
   const studio = useUi((s) => s.studio)
   
   const [files, setFiles] = useState<FlatFile[]>([])
+  const [hooks, setHooks] = useState<Record<string, { ok?: boolean; issues?: string[] }>>({})
   const [filesErr, setFilesErr] = useState('')
   const [selected, setSelected] = useState('')
   const [follow, setFollow] = useState(true)
@@ -106,8 +107,12 @@ export default function ArtifactsPanel() {
       .workspace(taskId)
       .then((r) => {
         const list: FlatFile[] = flattenTree(r.tree).filter(
-          (f) => f.path.split('/').pop() !== '.otter_rag.db',
+          (f) => {
+            const base = f.path.split('/').pop()
+            return base !== '.otter_rag.db' && base !== '.otter_hooks.json'
+          },
         )
+        setHooks((r as { hooks?: Record<string, { ok?: boolean; issues?: string[] }> }).hooks || {})
         setFilesErr('')
         setFiles(list)
         if (follow) {
@@ -226,6 +231,11 @@ export default function ArtifactsPanel() {
         <span className="truncate max-w-[140px]">
           <BaseName path={f.path} />
         </span>
+        {hooks[f.path] && hooks[f.path].ok === false && (
+          <span className="text-[10px] font-bold text-danger" title={(hooks[f.path].issues || []).join('\n')}>
+            syntax
+          </span>
+        )}
       </button>
     )
   })

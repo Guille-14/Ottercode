@@ -154,6 +154,7 @@ export interface WorkspaceResponse {
   stats: WorkspaceStats
   truncated?: boolean
   tree: TreeNode[]
+  hooks?: Record<string, { ok?: boolean; issues?: string[] }>
 }
 
 export interface ProfileActiveResponse {

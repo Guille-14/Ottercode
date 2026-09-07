@@ -4,7 +4,7 @@ from backend.config import *  # noqa: F401,F403
 from backend.profiles import _load_active_profile  # noqa: E402
 from backend.history import cleanup_empty_tasks, load_history  # noqa: E402
 from backend.db import _migrate_json_to_db, init_db  # noqa: E402
-from backend.config import APP_VERSION, MOBILE_DIR, STATIC_DIR, _load_identity  # noqa: E402
+from backend.config import APP_VERSION, MOBILE_DIR, STATIC_DIR, _load_identity, warn_ollama_speed_env  # noqa: E402
 from backend.config import _load_identity  # noqa
 from backend.db import *  # noqa: F401,F403
 from backend.history import *  # noqa: F401,F403
@@ -24,6 +24,9 @@ init_db()
 _migrate_json_to_db()
 _ensure_default_profiles()
 _load_active_profile()
+warn_ollama_speed_env()
+from backend.router import preload_router  # noqa: E402
+preload_router()
 
 
 app = FastAPI(title="OtterCode API", version=APP_VERSION)

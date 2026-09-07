@@ -2,6 +2,7 @@
 from __future__ import annotations
 from backend.config import *  # noqa: F401,F403
 from backend.config import DEFAULT_MODEL, NUM_CTX_DEFAULT, WORKSPACE_ROOT  # noqa: E402
+import re
 
 
 PROFILES_DIR = WORKSPACE_ROOT / "profiles"
@@ -143,6 +144,41 @@ class ProfileRequest(BaseModel):
     top_p: float = Field(default=0.9, ge=0.0, le=1.0)
     num_ctx: int = Field(default=NUM_CTX_DEFAULT, ge=2048, le=131072)
     system_override: str = Field(default="", max_length=10000)
+
+
+def _param_billions(name: str) -> float:
+    m = re.search(r"(\d+(?:\.\d+)?)\s*[bB]\b", name or "")
+    if m:
+        return float(m.group(1))
+    m = re.search(r":(\d+(?:\.\d+)?)b\b", (name or "").lower())
+    if m:
+        return float(m.group(1))
+    return 0.0
+
+
+def suggest_model_for_role(role: str, models: List[str]) -> Dict[str, Any]:
+    """Sugiere modelo según rol; no fuerza la elección."""
+    r = (role or "").lower()
+    complex_role = any(
+        k in r for k in ("program", "desarroll", "review", "revisor", "coder", "architect", "código", "codigo")
+    )
+    simple_role = any(k in r for k in ("resumen", "formato", "format", "summary", "traduc"))
+    ranked = sorted(models or [], key=_param_billions)
+    small = [m for m in ranked if 0 < _param_billions(m) <= 7] or ranked[:1]
+    large = [m for m in ranked if _param_billions(m) >= 7] or (ranked[-1:] if ranked else [])
+    if complex_role:
+        pick = large[-1] if large else (ranked[-1] if ranked else DEFAULT_MODEL)
+        hint = "Rol complejo: conviene un modelo grande (más VRAM)."
+        band = "large"
+    elif simple_role:
+        pick = small[0] if small else (ranked[0] if ranked else DEFAULT_MODEL)
+        hint = "Rol simple: un 3B–7B suele bastar."
+        band = "small"
+    else:
+        pick = ranked[len(ranked) // 2] if ranked else DEFAULT_MODEL
+        hint = "Rol mixto: elige según VRAM libre."
+        band = "mid"
+    return {"suggested": pick, "hint": hint, "band": band, "complex": complex_role}
 
 
 class ActiveProfileRequest(BaseModel):

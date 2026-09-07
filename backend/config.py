@@ -182,6 +182,37 @@ HACKER_SUFFIX = (
 )
 
 APP_VERSION = "2.6.0"
+
+# Variables del proceso de Ollama (no de OtterCode): aceleran atención y KV-cache.
+# Hay que exportarlas ANTES de arrancar el daemon ollama, no el backend.
+OLLAMA_SPEED_ENV = {
+    "OLLAMA_FLASH_ATTENTION": "1",
+    "OLLAMA_KV_CACHE_TYPE": "q8_0",
+    "OLLAMA_MAX_LOADED_MODELS": "1",
+    "OLLAMA_NUM_PARALLEL": "1",
+}
+
+
+def warn_ollama_speed_env() -> List[str]:
+    """Log de aviso si el proceso de Ollama no tiene las flags de velocidad.
+
+    No bloquea el arranque: OtterCode no controla el daemon. Devuelve las
+    claves ausentes o con valor distinto al recomendado.
+    """
+    missing: List[str] = []
+    for key, want in OLLAMA_SPEED_ENV.items():
+        got = os.environ.get(key, "").strip()
+        if got != want:
+            missing.append(f"{key}={want} (actual={got or 'unset'})")
+    if missing:
+        print(
+            "[ottercode] Ollama sin flags de velocidad. Exporta en el proceso "
+            "del daemon (no solo en el backend) y reinicia ollama:\n  "
+            + "\n  ".join(missing)
+            + "\n  Ver README.md · Variables de entorno de Ollama.",
+            flush=True,
+        )
+    return missing
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)

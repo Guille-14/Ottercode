@@ -1941,6 +1941,31 @@ def main() -> int:
         check("T49d vault por defecto fuera de /tmp (~/.ottercode o APPDATA)",
               "/tmp" not in str(d49) and d49.is_dir(), str(d49))
 
+        print("\n⚡ T50: V1–V5 velocidad, router, SKILL.md, modelo por rol, hooks…")
+        from backend.config import OLLAMA_SPEED_ENV, warn_ollama_speed_env
+        check("T50a flags Ollama documentadas y aviso no bloqueante",
+              "OLLAMA_FLASH_ATTENTION" in OLLAMA_SPEED_ENV
+              and isinstance(warn_ollama_speed_env(), list), "")
+        from backend.router import route as route_fn
+        os.environ["OTTERCODE_ROUTER_LLM"] = "0"
+        d_hi = route_fn("hola")
+        d_code = route_fn("crea un archivo HTML con un contador en JS")
+        check("T50b router: saludo=directo, código=agente",
+              d_hi.get("tipo") == "directo" and d_code.get("tipo") == "agente",
+              f"{d_hi} {d_code}")
+        from backend.md_skills import get_md_skill
+        sk50 = get_md_skill("tono-directo")
+        check("T50c skill carpeta SKILL.md",
+              bool(sk50) and "SKILL.md" in (sk50 or {}).get("path", ""), str(sk50))
+        from backend.profiles import suggest_model_for_role
+        sug = suggest_model_for_role("Programador", ["qwen2.5:1.5b", "qwen2.5:14b"])
+        check("T50d Programador sugiere el modelo grande",
+              "14b" in str(sug.get("suggested")), sug)
+        from backend.hooks import post_code_generated
+        lint = post_code_generated("broken.py", "def (")
+        check("T50e hook post_code_generated marca syntax error",
+              lint.get("ok") is False and lint.get("issues"), lint)
+
     finally:
         for p in (p_api, p_mock):
             try:

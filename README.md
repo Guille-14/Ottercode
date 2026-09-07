@@ -45,6 +45,41 @@ Abre `http://127.0.0.1:8099`.
 | `OTTERCODE_FLUSH_TIMEOUT` | `60` | Timeout del flush de VRAM |
 | `OTTERCODE_MODELS_TTL` | `30` | TTL (s) de la caché de `/api/tags` |
 
+## Variables de entorno de Ollama (velocidad / VRAM)
+
+Hay que exportarlas **en el proceso del daemon Ollama** (no basta con el backend) y reiniciar Ollama. OtterCode avisa en el log de arranque si faltan; no bloquea.
+
+| Variable | Valor | Efecto |
+| --- | --- | --- |
+| `OLLAMA_FLASH_ATTENTION` | `1` | Atención flash: menos VRAM, más contexto |
+| `OLLAMA_KV_CACHE_TYPE` | `q8_0` | KV-cache cuantizado |
+| `OLLAMA_MAX_LOADED_MODELS` | `1` | Un modelo a la vez (RTX 8 GB) |
+| `OLLAMA_NUM_PARALLEL` | `1` | Sin lotes concurrentes que inflen el KV |
+
+**Linux / macOS** (systemd user o shell):
+
+```bash
+export OLLAMA_FLASH_ATTENTION=1
+export OLLAMA_KV_CACHE_TYPE=q8_0
+export OLLAMA_MAX_LOADED_MODELS=1
+export OLLAMA_NUM_PARALLEL=1
+# si Ollama corre como servicio:
+# Linux: sudo systemctl edit ollama  → [Service] Environment=...
+# macOS: launchctl setenv OLLAMA_FLASH_ATTENTION 1  (y las demás) y reinicia Ollama
+ollama serve
+```
+
+**Windows** (PowerShell, sesión actual o variables de usuario):
+
+```powershell
+$env:OLLAMA_FLASH_ATTENTION="1"
+$env:OLLAMA_KV_CACHE_TYPE="q8_0"
+$env:OLLAMA_MAX_LOADED_MODELS="1"
+$env:OLLAMA_NUM_PARALLEL="1"
+# Persistente: Configuración → Sistema → Acerca de → Configuración avanzada → Variables de entorno
+ollama serve
+```
+
 ## Estructura
 
 ```

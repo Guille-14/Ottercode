@@ -70,6 +70,9 @@ function SkillsPane() {
 function ProfilesPane() {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [active, setActive] = useState('')
+  const [role, setRole] = useState('Programador')
+  const [models, setModels] = useState<{ name: string; size_gb?: number; vram_est_gb?: number }[]>([])
+  const [suggest, setSuggest] = useState<{ suggested?: string; hint?: string }>({})
 
   const load = async () => {
     const r = await F.loadProfiles()
@@ -78,6 +81,12 @@ function ProfilesPane() {
   }
   useEffect(() => {
     void load()
+    api.models().then((r) => {
+      const details = (r as { details?: { name: string; size_gb?: number; vram_est_gb?: number }[] }).details
+      setModels(details?.length ? details : (r.models || []).map((n) => ({ name: n })))
+      const sg = (r as { suggest?: Record<string, { suggested?: string; hint?: string }> }).suggest
+      if (sg?.Programador) setSuggest(sg.Programador)
+    }).catch(() => undefined)
   }, [])
 
   const select = async (name: string) => {
@@ -87,7 +96,45 @@ function ProfilesPane() {
 
   return (
     <Card className="p-4" id="profileSelect">
-      <h3 className="mb-3 text-sm font-semibold">Perfiles</h3>
+      <h3 className="mb-3 text-sm font-semibold">Perfiles / modelo por bot</h3>
+      <label className="mb-3 block text-xs text-muted">
+        Rol del bot
+        <input
+          className="mt-1 w-full rounded-md border border-line bg-canvas px-2 py-1 text-sm text-ink"
+          value={role}
+          onChange={(e) => {
+            setRole(e.target.value)
+            api.models().then((r) => {
+              const sg = (r as { suggest?: Record<string, { suggested?: string; hint?: string }> }).suggest || {}
+              const hit = Object.entries(sg).find(([k]) =>
+                e.target.value.toLowerCase().includes(k.toLowerCase()),
+              )
+              setSuggest(hit ? hit[1] : sg.Programador || {})
+            }).catch(() => undefined)
+          }}
+        />
+      </label>
+      {suggest.hint && (
+        <p className="mb-2 text-xs text-muted">
+          Recomendación: <strong className="text-ink">{suggest.suggested}</strong> — {suggest.hint}
+        </p>
+      )}
+      <ul className="mb-3 max-h-40 overflow-auto text-xs">
+        {models.map((m) => {
+          const rec = m.name === suggest.suggested
+          return (
+            <li
+              key={m.name}
+              className={`flex justify-between rounded px-2 py-1 ${rec ? 'bg-accent text-accentink' : ''}`}
+            >
+              <span>{m.name}{rec ? ' · recomendado' : ''}</span>
+              <span className={rec ? 'opacity-80' : 'text-muted'}>
+                {m.size_gb ? `${m.size_gb} GB · ~${m.vram_est_gb} GB VRAM` : ''}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
       {profiles.length === 0 ? (
         <p className="text-sm text-muted">Sin perfiles.</p>
       ) : (

@@ -90,7 +90,10 @@ def flush_all_vram() -> Dict[str, Any]:
         models = [DEFAULT_MODEL]  # fallback seguro
     ok = True
     errors: List[str] = []
+    from backend.router import ROUTER_MODEL, is_router_model
     for model in models:
+        if is_router_model(model) or model == ROUTER_MODEL:
+            continue
         try:
             resp = _ollama_session.post(
                 f"{OLLAMA_BASE_URL}/api/generate",

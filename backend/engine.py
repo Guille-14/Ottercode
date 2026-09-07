@@ -316,7 +316,7 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
     if mem:
         system_prompt = system_prompt + "\n\n# 🧠 MEMORIA APRENDIDA (CONTEXTO A LARGO PLAZO)\n" + mem
     from backend.md_skills import active_skill_prompt
-    _sk = active_skill_prompt()
+    _sk = active_skill_prompt(getattr(run, "forced_skill", "") or "")
     if _sk:
         system_prompt = system_prompt + "\n\n# SKILLS ACTIVAS (markdown)\n" + _sk
     
@@ -1143,6 +1143,8 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
                 ) + " (especialista inyectado)"
             else:
                 extra = ""
+            from backend.hooks import pre_agent_handoff
+            pre_agent_handoff("architect", "researcher", run.task_id)
             yield sse(SseEvent.delegate, {
                 "from": "architect", "to": "researcher",
                 "text": f"🧠 → Delegando a 🔬 el Investigador (análisis de contexto){extra}",
@@ -1214,6 +1216,8 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
             if report and report.strip():
                 expert_reports.append(report.strip())
             nxt = injected[i + 1].id if i + 1 < len(injected) else "developer"
+            from backend.hooks import pre_agent_handoff
+            pre_agent_handoff(agent.id, nxt, run.task_id)
             yield sse(SseEvent.delegate, {
                 "from": agent.id, "to": nxt,
                 "text": f"{agent.icon} → Delegando: informe de {agent.nombre} para la próxima fase",

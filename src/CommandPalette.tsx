@@ -20,6 +20,7 @@ export default function CommandPalette({
   const setComposerDraft = useUi((s) => s.setComposerDraft)
   const [q, setQ] = useState('')
   const [sessions, setSessions] = useState<{ id: string; task: string }[]>([])
+  const [skillCmds, setSkillCmds] = useState<{ cmd: string; desc: string }[]>([])
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -36,19 +37,28 @@ export default function CommandPalette({
           })),
         ),
       )
+      api.skills().then((r) =>
+        setSkillCmds(
+          (r.skills || [])
+            .filter((s) => s.kind === 'markdown' || s.cat === 'Markdown')
+            .map((s) => ({ cmd: `/${s.name}`, desc: s.desc || 'skill' })),
+        ),
+      )
     }
   }, [open])
 
   const items = useMemo<Item[]>(() => {
     const ql = q.toLowerCase()
     const out: Item[] = []
+    const cmds = [...SLASH_COMMANDS, ...skillCmds]
     if (ql === '') {
-      for (const c of SLASH_COMMANDS.slice(0, 5))
+      for (const c of cmds.slice(0, 8))
         out.push({ kind: 'cmd', label: c.cmd, hint: c.desc })
       for (const v of nav) out.push({ kind: 'view', label: v.label, hint: 'vista' })
     } else {
-      for (const c of SLASH_COMMANDS)
-        if (c.cmd.includes(ql)) out.push({ kind: 'cmd', label: c.cmd, hint: c.desc })
+      for (const c of cmds)
+        if (c.cmd.includes(ql) || c.desc.toLowerCase().includes(ql))
+          out.push({ kind: 'cmd', label: c.cmd, hint: c.desc })
       for (const v of nav)
         if (v.label.toLowerCase().includes(ql) || v.key.includes(ql))
           out.push({ kind: 'view', label: v.label, hint: 'vista' })
@@ -57,7 +67,7 @@ export default function CommandPalette({
           out.push({ kind: 'ses', label: s.task.slice(0, 48), hint: `${s.id} · sesión` })
     }
     return out.slice(0, 10)
-  }, [q, sessions, nav])
+  }, [q, sessions, nav, skillCmds])
 
   if (!open) return null
 

@@ -51,6 +51,15 @@ export function applySlash(line: string): SlashResult {
     case '/yolo':
       return { fields: { task: arg, start_agent: 'developer', mode: 'chain' } }
     default:
+      if (cmd.startsWith('/') && cmd.length > 1) {
+        const skill = cmd.slice(1)
+        return {
+          fields: {
+            task: arg || `Usar skill ${skill}`,
+            skill,
+          },
+        }
+      }
       return { fields: { task: cmd + (arg ? ` ${arg}` : '') } }
   }
 }

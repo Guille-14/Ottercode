@@ -192,7 +192,33 @@ def api_pulse() -> Dict[str, Any]:
 def api_models() -> Dict[str, Any]:
     models = fetch_models()
     merged = sorted(set((models or []) + [DEFAULT_MODEL]))
-    return {"ollama_ok": models is not None, "models": merged}
+    details: List[Dict[str, Any]] = []
+    try:
+        resp = _ollama_httpx.get("/api/tags")
+        resp.raise_for_status()
+        for m in resp.json().get("models") or []:
+            if not isinstance(m, dict):
+                continue
+            name = str(m.get("name") or "")
+            size = int(m.get("size") or 0)
+            details.append({
+                "name": name,
+                "size": size,
+                "size_gb": round(size / (1024 ** 3), 2) if size else 0,
+                "vram_est_gb": round(size / (1024 ** 3) * 0.7, 2) if size else 0,
+            })
+    except Exception:
+        details = [{"name": n, "size": 0, "size_gb": 0, "vram_est_gb": 0} for n in merged]
+    from backend.profiles import suggest_model_for_role
+    return {
+        "ollama_ok": models is not None,
+        "models": merged,
+        "details": details,
+        "suggest": {
+            "Programador": suggest_model_for_role("Programador", merged),
+            "resumen": suggest_model_for_role("resumen", merged),
+        },
+    }
 
 
 @router.get(Route.PS)
@@ -767,6 +793,7 @@ class TaskRequest(BaseModel):
     yolo: bool = False
     # B · tope configurable del bucle Programador↔Revisor
     max_rounds: Optional[int] = Field(default=None, ge=1, le=25)
+    skill: Optional[str] = Field(default=None, max_length=64)
 
 
 @router.post(Route.TASK)
@@ -910,10 +937,47 @@ def api_task(req: TaskRequest) -> StreamingResponse:
                   agent_icon=get_agent(run.start_agent).icon,
                   iteration=0, last_tool=None, last_tool_ok=None)
 
+    from backend.router import route, direct_reply
+    from backend.md_skills import get_md_skill, active_skill_prompt
+    _decision = {"tipo": "agente", "destino": req.start_agent}
+    if os.environ.get("OTTERCODE_ROUTER", "1") != "0" and not req.continue_task:
+        try:
+            _decision = route(req.task)
+        except Exception:
+            pass
+    if req.skill:
+        _decision = {"tipo": "skill", "destino": req.skill}
+        sk = get_md_skill(req.skill)
+        if sk:
+            extra = f"\n\n# SKILL {sk['name']}\n{sk['body'][:4000]}"
+            run.system_inject = (run.system_inject or "") + extra
+    elif _decision.get("tipo") == "skill":
+        sk = get_md_skill(str(_decision.get("destino") or ""))
+        if sk:
+            run.system_inject = (run.system_inject or "") + f"\n\n# SKILL {sk['name']}\n{sk['body'][:4000]}"
+
     def generator() -> Iterator[str]:
         """Puente cola+worker: si el modelo está cargando a VRAM y no fluyen
         tokens, emite heartbeats SSE (': heartbeat') para que ningún proxy
         o cliente corte la conexión por inactividad."""
+        if _decision.get("tipo") == "directo" and req.mode == "chat":
+            try:
+                yield sse(SseEvent.session_id, {"task_id": run.task_id})
+                yield sse(SseEvent.system, {"text": "⚡ router (modelo pequeño, keep_alive=-1)"})
+                text = direct_reply(req.task)
+                for ch in text:
+                    yield sse(SseEvent.token, {"agent": "router", "token": ch})
+                run.transcript.append({"kind": "agent", "agent": "router", "text": text})
+                yield sse(SseEvent.task_done, {
+                    "task_id": run.task_id, "mode": "chat", "approved": True,
+                    "iterations": 0, "files": [], "duration_s": 0, "review_verdict": "",
+                    "injected_agents": [], "router": True,
+                })
+            finally:
+                _activity_finish("done")
+                RUN_LOCK.release()
+                ACTIVE_RUN.pop(run.task_id, None)
+            return
         q: "queue.Queue" = queue.Queue()
         sentinel = object()
 
@@ -1118,6 +1182,7 @@ def api_workspace(task_id: Optional[str] = None) -> Dict[str, Any]:
     tree = _ws_node(workdir, budget)
     if not tree:
         raise HTTPException(status_code=500, detail="Workspace ilegible.")
+    from backend.hooks import load_file_hooks
     return {
         "ok": True,
         "task_id": tid,
@@ -1131,6 +1196,7 @@ def api_workspace(task_id: Optional[str] = None) -> Dict[str, Any]:
         },
         "truncated": budget[0] <= 0,
         "tree": tree.get("children", []),
+        "hooks": load_file_hooks(workdir),
     }
 
 
