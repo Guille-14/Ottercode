@@ -32,6 +32,8 @@ interface UiState {
   pendingPerm: { id: string; tool: string; title: string } | null
   focus: boolean
   composerDraft: string
+  theme: 'light' | 'dark'
+  toggleTheme: () => void
 
   model: string
   artifactsOpen: boolean
@@ -89,6 +91,14 @@ export const useUi = create<UiState>()(
       pendingPerm: null,
       focus: false,
       composerDraft: '',
+      theme: 'light',
+      toggleTheme: () =>
+        set((s) => {
+          const theme = s.theme === 'dark' ? 'light' : 'dark'
+          document.documentElement.classList.toggle('dark', theme === 'dark')
+          document.documentElement.style.colorScheme = theme
+          return { theme }
+        }),
 
       model: 'qwen3.5:4b',
       artifactsOpen: true,
@@ -262,6 +272,7 @@ export const useUi = create<UiState>()(
         taskId: state.taskId,
         mission: state.mission,
 
+        theme: state.theme,
         model: state.model,
         artifactsOpen: state.artifactsOpen,
         loopMode: state.loopMode,

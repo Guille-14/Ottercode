@@ -25,6 +25,27 @@
   --oc-orange: #F59E0B;
   --oc-code-bg: #F4F4F5;
   --oc-code-fg: #18181B;
+  --oc-success: #16A34A;
+}
+
+html.dark {
+  color-scheme: dark;
+  --oc-bg: #09090B;
+  --oc-surface: #18181B;
+  --oc-surface2: #27272A;
+  --oc-border: #27272A;
+  --oc-border2: #3F3F46;
+  --oc-text1: #FAFAFA;
+  --oc-text2: #A1A1AA;
+  --oc-text3: #71717A;
+  --oc-accent: #FAFAFA;
+  --oc-accent-ink: #09090B;
+  --oc-green: #FAFAFA;
+  --oc-red: #F87171;
+  --oc-orange: #FBBF24;
+  --oc-code-bg: #18181B;
+  --oc-code-fg: #FAFAFA;
+  --oc-success: #4ADE80;
   --oc-canvas: var(--oc-bg);
   --oc-panel: var(--oc-surface);
   --oc-line: var(--oc-border);

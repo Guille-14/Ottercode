@@ -1923,10 +1923,9 @@ def main() -> int:
 
         print("\n🧾 T49: C1-C4 tema claro · memoria SQLite · skills md · vault persistente…")
         _, js49, css49 = _assets()
-        check("T49a CSS: paleta Trade Republic en :root, sin .light/.dark",
+        check("T49a CSS: paleta TR en :root y html.dark invertible",
               "--oc-bg: #FFFFFF" in css49 and "--oc-accent: #18181B" in css49
-              and ".light {" not in css49 and ".dark {" not in css49
-              and "toggleTheme" not in js49, "")
+              and "html.dark" in css49 and "toggleTheme" in js49, "")
         from backend.memory import add_memory, get_memory as gm
         add_memory("Prefiere TypeScript y UIs claras", agente_id="agent")
         rec = gm()
