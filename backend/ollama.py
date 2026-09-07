@@ -340,15 +340,17 @@ def stream_llm(
                 except AttributeError:
                     pass
                 raise AbortRequested()
-            if emitted or attempt > 2:
+            max_tries = int(os.environ.get("OTTERCODE_OLLAMA_RETRIES", "3"))
+            if emitted or attempt >= max_tries:
                 raise RuntimeError(_friendly_ollama_error(exc))
-            # v4.8 · hasta 3 intentos sin primer token: el swap de modelos en
-            # Ollama (otro modelo residente) + prefill puede rozar los 420 s.
+            wait = min(32, 2 ** attempt)
+            print(f"[ottercode] Ollama retry {attempt}/{max_tries} wait={wait}s: {exc}",
+                  flush=True)
             yield sse(SseEvent.system, {
-                "text": f"⏳ Ollama está cargando/ocupado (intento {attempt}/3); "
-                        f"reintentando en 3 s…"
+                "text": f"⏳ Ollama caída/timeout (intento {attempt}/{max_tries}); "
+                        f"reintento en {wait}s…"
             })
-            time.sleep(3)
+            time.sleep(wait)
 
 
 def _llm_request(run: Any, system_prompt: str, prompt: str) -> Tuple[str, Dict[str, Any]]:

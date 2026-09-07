@@ -794,6 +794,7 @@ class TaskRequest(BaseModel):
     # B · tope configurable del bucle Programador↔Revisor
     max_rounds: Optional[int] = Field(default=None, ge=1, le=25)
     skill: Optional[str] = Field(default=None, max_length=64)
+    resume_checkpoint: Optional[str] = Field(default=None, max_length=80)
 
 
 @router.post(Route.TASK)
@@ -915,6 +916,12 @@ def api_task(req: TaskRequest) -> StreamingResponse:
         pass  # __init__ ya registró la entrada user y el system ⚓
 
     run.memory_block = _memory_recall(run.task_text)   # 🧠 recuerdo del vault
+    if req.resume_checkpoint:
+        from backend.runstate import resume_summary
+        _rs = resume_summary(req.resume_checkpoint)
+        if _rs:
+            run.system_inject = (run.system_inject or "") + "\n\n" + _rs
+            run.transcript.append({"kind": "system", "text": "▶ Reanudando desde checkpoint " + req.resume_checkpoint})
     ACTIVE_RUN[run.task_id] = run
     # Dedup en el historial: si el hilo ya tenía meta, reemplázalo (1 fila) y
     # CONSERVA el título original de la conversación (no el del nuevo mensaje).

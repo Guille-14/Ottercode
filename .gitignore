@@ -5,3 +5,4 @@ static/
 .venv/
 .DS_Store
 .env
+backend/data/checkpoints/*.jsonl

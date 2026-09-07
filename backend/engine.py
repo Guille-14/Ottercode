@@ -9,7 +9,7 @@ ASK_PERMISSIONS = False
 
 from backend.vault import memory_note_for_run  # noqa: E402
 from backend.runtime import _activity_finish  # noqa: E402
-from backend.runstate import OtterRun, _condense_entries  # noqa: E402
+from backend.runstate import OtterRun, _condense_entries, append_checkpoint, note_stall, resume_summary  # noqa: E402
 from backend.prompts import _looks_like_tool_attempt, _prev_conversation_block, alias_args, build_architect_prompt, build_chat_prompt, build_developer_prompt, build_expert_prompt, build_researcher_prompt, build_reviewer_prompt, extract_injections, extract_tool_call, format_tool_result, is_approved  # noqa: E402
 from backend.ollama import _estimate_tokens, _ollama_ndjson_text, flush_vram, stream_llm  # noqa: E402
 from backend.history import TOOL_CAPABLE_MODELS, save_session  # noqa: E402
@@ -78,6 +78,75 @@ def _compact_context(run: Any, agent_id: str, entries: List[Tuple[str, str]]) ->
         return _ollama_ndjson_text(resp.text)
     except Exception:  # noqa: BLE001 — la compactación jamás tumba un turno
         return None
+
+
+def _maybe_compact_messages(run: Any, agent_id: str, system_prompt: str) -> Optional[str]:
+    """L2: compacta si >75% num_ctx o cada N llamadas LLM."""
+    every = int(os.environ.get("OTTERCODE_COMPACT_EVERY", "6") or "6")
+    run._llm_calls = int(getattr(run, "_llm_calls", 0) or 0) + 1
+    num_ctx = getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT
+    limit = int(int(num_ctx) * 0.75)
+    est = (_estimate_tokens(system_prompt)
+           + sum(_estimate_tokens(m.get("content", "")) for m in (run.messages or [])))
+    periodic = every > 0 and run._llm_calls % every == 0 and len(run.messages or []) > 6
+    over = est > limit and len(run.messages or []) > 6
+    if not (periodic or over):
+        return None
+    _old = run.messages[1:-4] if len(run.messages) > 5 else run.messages[1:]
+    _cond = [(m.get("content", ""), "") for m in _old if m.get("role") == "assistant"]
+    _summ = _compact_context(run, agent_id, _cond) or "(historial antiguo truncado)"
+    run.messages = (run.messages[:1]
+                    + [{"role": "user", "content": f"[RESUMEN DEL CONTEXTO ANTERIOR]\n{_summ}"}]
+                    + run.messages[-4:])
+    append_checkpoint(run, kind="compact", done="compactación de contexto",
+                      decisions=_summ[:400], pending="", next_action="seguir con el resumen")
+    return _summ
+
+
+def _thermal_ease(run: Any) -> Optional[str]:
+    """L6: si VRAM/temp altas de forma sostenida, baja num_ctx y espacia."""
+    try:
+        from backend.config import VRAM_TOTAL_BYTES, _ollama_httpx
+        used = 0
+        resp = _ollama_httpx.get("/api/ps")
+        for m in (resp.json().get("models") or []):
+            used += int(m.get("size_vram") or 0)
+        ratio = used / max(int(VRAM_TOTAL_BYTES or 1), 1)
+    except Exception:
+        ratio = 0.0
+    temp = 0
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+            timeout=2, text=True,
+        ).strip()
+        temp = int(out.splitlines()[0])
+    except Exception:
+        temp = 0
+    hot = ratio >= 0.92 or temp >= 80
+    now = time.time()
+    if hot:
+        since = getattr(run, "_high_vram_since", None)
+        if since is None:
+            run._high_vram_since = now
+            return None
+        hold = float(os.environ.get("OTTERCODE_THERMAL_HOLD_S", "90"))
+        if now - since < hold:
+            return None
+        if getattr(run, "_thermal_eased", False):
+            time.sleep(float(os.environ.get("OTTERCODE_THERMAL_SLEEP", "2")))
+            return None
+        orig = getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT
+        run.num_ctx = max(2048, int(int(orig) * 0.7))
+        run._thermal_eased = True
+        msg = (f"🌡️ Carga sostenida (VRAM {ratio:.0%} temp={temp}°C): "
+               f"num_ctx {orig}→{run.num_ctx}, llamadas más espaciadas.")
+        append_checkpoint(run, kind="thermal", done=msg, pending="GPU al límite",
+                          next_action="seguir con ctx reducido")
+        time.sleep(float(os.environ.get("OTTERCODE_THERMAL_SLEEP", "2")))
+        return msg
+    run._high_vram_since = None
+    return None
 
 
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>|<think>[\s\S]*$", re.IGNORECASE)
@@ -349,28 +418,15 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
     while steps < max_steps:
         if run.aborted:
             raise AbortRequested()
-        # ── v6.0 · GESTIÓN DE CONTEXTO (estimación de tokens + truncado) ──
-        _limit_tok = int((getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT) * 0.8)
-        _est = (_estimate_tokens(system_prompt)
-                + sum(_estimate_tokens(m.get("content", "")) for m in run.messages))
-        if _est > _limit_tok and len(run.messages) > 6:
-            _old = run.messages[1:-6]
-            _cond = [(m.get("content", ""), "") for m in _old
-                     if m.get("role") == "assistant"]
+        _th = _thermal_ease(run)
+        if _th:
+            yield sse(SseEvent.system, {"text": _th})
+        _summ = _maybe_compact_messages(run, agent_id, system_prompt)
+        if _summ:
             yield sse(SseEvent.system, {
-                "text": f"🗜️ Contexto compactado (~{_est:,} tokens estimados > "
-                        f"{_limit_tok:,}): resumiendo {len(_old)} mensajes antiguos…"
+                "text": f"🗜️ Compactación automática (75% ctx o cada N turnos): {len(_summ)} chars."
             })
-            _summ = _compact_context(run, agent_id, _cond) or "(historial antiguo truncado)"
-            run.messages = (run.messages[:1]
-                            + [{"role": "user",
-                                "content": f"[RESUMEN DEL CONTEXTO ANTERIOR]\n{_summ}"}]
-                            + run.messages[-6:])
-            run.transcript.append(
-                {"kind": "system",
-                 "text": f"🗜️ {get_agent(agent_id).nombre}: contexto compactado "
-                         f"({len(_old)} mensajes antiguos resumidos a {len(_summ)} chars)."}
-            )
+            run.transcript.append({"kind": "system", "text": f"🗜️ contexto compactado ({len(_summ)} chars)."})
         steps += 1
         # v4.4 · cada generación arranca con el parcial a cero
         try:
@@ -595,6 +651,36 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         })
         _activity_set(last_tool=title, last_tool_ok=None)
         result = executor.dispatch(tool_name, args)
+        if result.get("ok") and tool_name in ("write_file", "append_file", "edit_file"):
+            try:
+                from backend.hooks import post_code_generated, remember_file_hook
+                fp = str(args.get("filepath") or args.get("path") or "")
+                body = ""
+                try:
+                    body = (run.workdir / fp).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    body = str(args.get("content") or "")
+                lint = post_code_generated(fp, body)
+                remember_file_hook(run.workdir, lint)
+                append_checkpoint(
+                    run, kind="verify", done=f"verificación {fp}",
+                    decisions=("ok" if lint.get("ok") else "; ".join(lint.get("issues") or [])),
+                    pending="" if lint.get("ok") else "corregir sintaxis",
+                    next_action="siguiente archivo o revisor",
+                    extra={"path": fp, "ok": lint.get("ok")},
+                )
+                if not lint.get("ok"):
+                    yield sse(SseEvent.system, {
+                        "text": "⚠️ hook post_code_generated: " + "; ".join(lint.get("issues") or []),
+                    })
+                    if note_stall(run, fp, "; ".join(lint.get("issues") or [])):
+                        yield sse(SseEvent.system, {
+                            "text": f"🛑 Circuit breaker: {fp} bloqueado tras 3 fallos iguales. "
+                                    "Intervención humana."
+                        })
+                        break
+            except Exception:
+                pass
         yield sse(SseEvent.tool_result, {
             "id": call_id, "tool": tool_name, "ok": result["ok"],
             "output": result["output"], "ms": result["ms"],
@@ -602,11 +688,23 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         _activity_set(last_tool_ok=result["ok"])
         if result.get("ok") and tool_name in _WRITE_TOOLS:
             run._files_ever_written = True   # v4.9 · FIX B
+            append_checkpoint(
+                run, kind="file", done=f"escrito {args.get('filepath') or args.get('path')}",
+                decisions=tool_name, pending="más archivos o revisión",
+                next_action="continuar unidad de trabajo",
+            )
+        if not result.get("ok"):
+            err = str(result.get("output") or "error")
+            if note_stall(run, tool_name, err):
+                yield sse(SseEvent.system, {
+                    "text": f"🛑 Circuit breaker: '{tool_name}' falló 3 veces igual. "
+                            "Subtarea bloqueada; se pasa a lo siguiente."
+                })
+                break
         run.transcript.append(
             {"kind": "tool", "tool": tool_name, "agent": agent_id, "iteration": iteration,
              "args": args, "ok": result["ok"], "output": result["output"]}
         )
-        # Handoff dentro del turno: el resultado de la skill vuelve a la cola.
         run._turn_tools.add(tool_name)
         run.messages.append(
             {"role": "user", "content": format_tool_result(tool_name, result)})
@@ -1059,6 +1157,8 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
             run.elapsed = round(time.time() - started, 1)
             run.meta["files"] = run.files_report
             _memory_finish(run, "done")
+            from backend.runstate import mark_checkpoint_closed
+            mark_checkpoint_closed(run.task_id)
             yield sse(SseEvent.task_done, {
                 "task_id": run.task_id, "mode": "chat",
                 "approved": run.approved,   # v5.1 · dictamen del loop en chat
@@ -1205,9 +1305,6 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
                     "text": f"🔬 → {injected[0].icon} Pasando el contexto al especialista {injected[0].nombre}",
                 })
 
-        # 3) 🧩 Especialistas dinámicos (relé entre el contexto y el código):
-        #    cada uno hereda plan + contexto (+ informe del anterior) y su
-        #    output alimenta al siguiente. FLUSH DE VRAM por cada uno.
         for i, agent in enumerate(injected):
             prev = expert_reports[-1] if expert_reports else ""
             report = yield from run_agent_turn(  # type: ignore[misc]
@@ -1223,10 +1320,8 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
                 "text": f"{agent.icon} → Delegando: informe de {agent.nombre} para la próxima fase",
             })
 
-        # 4) 💻 Programador + 5) 🔍 Revisor (± Bucle Infinito de correcciones)
-        feedback: Optional[str] = None
+        feedback = None
         dev_iter = 1
-        # Si la cadena arranca en el Revisor no hay Programador que corrija: 1 ronda.
         effective_rounds = run.max_rounds if start_idx <= 2 else 1
         for iteration in range(1, effective_rounds + 1):
             run.iterations = iteration

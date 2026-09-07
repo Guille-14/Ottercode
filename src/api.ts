@@ -402,6 +402,10 @@ export const api = {
     j<{ tree: unknown }>(
       fetchWithAuth(`${BASE}/tree?${new URLSearchParams(taskId ? { task_id: taskId, path } : { path })}`),
     ),
+  checkpoints: () =>
+    j<{ unfinished: { task_id: string; last: Record<string, unknown>; steps: number }[] }>(
+      fetchWithAuth(`${BASE}/checkpoints`),
+    ),
   workspace: (taskId: string) =>
     j<WorkspaceResponse>(fetchWithAuth(`${BASE}/workspace?task_id=${encodeURIComponent(taskId)}`)),
   zipUrl: (taskId: string) => `${BASE}/task/${encodeURIComponent(taskId)}/zip`,

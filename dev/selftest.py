@@ -1966,6 +1966,31 @@ def main() -> int:
         check("T50e hook post_code_generated marca syntax error",
               lint.get("ok") is False and lint.get("issues"), lint)
 
+        print("\n🛟 T51: checkpoints · compact 75% · circuit breaker · ollama retry…")
+        from backend.runstate import append_checkpoint, load_checkpoints, note_stall, list_unfinished_checkpoints
+        class _R:
+            task_id = "t51-ckpt-unit"
+            start_agent = "developer"
+            files_report = [{"path": "a.py"}]
+        r51 = _R()
+        append_checkpoint(r51, done="archivo a.py", decisions="write", pending="tests", next_action="revisar")
+        rows = load_checkpoints("t51-ckpt-unit")
+        check("T51a checkpoint JSONL persistente",
+              rows and rows[-1].get("done") == "archivo a.py", str(rows[-1])[:120] if rows else "vacío")
+        blocked = False
+        for _ in range(3):
+            blocked = note_stall(r51, "pip", "No module named fooinexistente")
+        check("T51b circuit breaker a la 3ª repetición",
+              blocked is True and any(b.get("key") == "pip" for b in getattr(r51, "_blocked", [])), "")
+        src_eng = (ROOT / "backend" / "engine.py").read_text(encoding="utf-8")
+        src_oll = (ROOT / "backend" / "ollama.py").read_text(encoding="utf-8")
+        check("T51c compactación 75% + periódica en engine",
+              "0.75" in src_eng and "OTTERCODE_COMPACT_EVERY" in src_eng, "")
+        check("T51d Ollama backoff 2**attempt y log de retry",
+              "2 ** attempt" in src_oll and "Ollama retry" in src_oll, "")
+        check("T51e vigilancia térmica/VRAM en engine+HwMonitor",
+              "_thermal_ease" in src_eng and "VRAM al límite" in (ROOT / "src" / "HwMonitor.tsx").read_text(encoding="utf-8"), "")
+
     finally:
         for p in (p_api, p_mock):
             try:

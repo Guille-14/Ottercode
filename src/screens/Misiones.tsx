@@ -2,7 +2,7 @@
 // globales, lista de mensajes y barra de entrada. El selector de modelo vive en
 // la sidebar y la columna de artefactos se gestiona desde App (V2 shell).
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Plus, AlertCircle } from 'lucide-react'
 import { useUi, isDoneName } from '../store'
 import { api } from '../api'
@@ -29,6 +29,12 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
 
   const lastPayload = useRef<Record<string, unknown> | null>(null)
   const mode = 'chat' as 'chat' | 'chain'
+  const [ckpt, setCkpt] = useState<{ task_id: string; last: Record<string, unknown>; steps: number } | null>(null)
+  useEffect(() => {
+    api.checkpoints().then((r) => {
+      setCkpt(r.unfinished?.[0] ?? null)
+    }).catch(() => undefined)
+  }, [taskId, streaming])
 
   // El panel se abre solo con el primer archivo creado, salvo que el usuario
   // lo haya cerrado manualmente durante esta misión.
@@ -121,6 +127,29 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
       )}
 
       {/* Error global de misión */}
+      {ckpt && !streaming && (
+        <div className="border-b border-accent/20 bg-accent/5 px-4 py-2 text-xs text-ink">
+          Checkpoint sin terminar: <span className="oc-mono">{ckpt.task_id}</span>
+          {' · '}{String(ckpt.last?.done ?? ckpt.steps + ' pasos')}
+          <button
+            type="button"
+            className="ml-2 rounded border border-line px-2 py-0.5 font-semibold"
+            onClick={() => {
+              onLaunch({
+                task: String(ckpt.last?.pending || 'continuar misión'),
+                resume_checkpoint: ckpt.task_id,
+                continue_task: ckpt.task_id,
+              })
+              setCkpt(null)
+            }}
+          >
+            Reanudar
+          </button>
+          <button type="button" className="ml-1 text-muted" onClick={() => setCkpt(null)}>
+            Empezar de cero
+          </button>
+        </div>
+      )}
       {missionError && (
         <div className="border-b border-danger/20 bg-danger/5 px-4 py-2 text-xs text-danger">
           Error en la misión: {missionError}

@@ -64,6 +64,7 @@ class Route:
     HISTORY_PRUNE = "/api/history/{task_id}/prune"
     SKILLS_ENABLE = "/api/skills/enable"
     AUTH_TOKEN = "/api/auth/token"
+    CHECKPOINTS = "/api/checkpoints"
 
 
 class SseEvent(Enum):
