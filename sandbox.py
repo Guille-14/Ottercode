@@ -38,7 +38,12 @@ class SandboxExecutor:
         if isinstance(cmd, str):
             cmd = ["bash", "-c", cmd]
         if not self._available:
-            # Fallback seguro sin bwrap (ejecución directa controlada)
+            required = os.environ.get("OTTERCODE_SANDBOX_REQUIRED", "1").strip().lower() not in ("0", "false", "no")
+            if required:
+                return {
+                    "returncode": 1, "stdout": "", "timeout": False,
+                    "stderr": "SANDBOX_REQUIRED: no hay bwrap. Instala bubblewrap o pon OTTERCODE_SANDBOX_REQUIRED=0.",
+                }
             try:
                 res = subprocess.run(
                     cmd,

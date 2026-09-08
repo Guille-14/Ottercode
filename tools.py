@@ -156,6 +156,10 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     # ── Claude Code: edición quirúrgica y búsqueda ──
     "edit_file":    {"cat": "FS", "writes_fs": True, "desc": "Edita un archivo reemplazando old_string por new_string (debe ser único)",
                      "example": '{"tool": "edit_file", "arguments": {"filepath": "app.py", "old_string": "def vieja():", "new_string": "def nueva():"}}'},
+    "apply_patch":  {"cat": "FS", "writes_fs": True, "desc": "Aplica unified diff o bloques SEARCH/REPLACE sobre un archivo",
+                     "example": '{"tool": "apply_patch", "arguments": {"filepath": "app.py", "patch": "<<<<<<< SEARCH\\nfoo\\n=======\\nbar\\n>>>>>>> REPLACE"}}'},
+    "git_commit":   {"cat": "Código", "writes_fs": True, "desc": "Commit en el workdir (message, paths opcionales)",
+                     "example": '{"tool": "git_commit", "arguments": {"message": "feat: x"}}'},
     "grep_search":  {"cat": "FS", "writes_fs": False, "desc": "Busca una regex en los archivos del workspace (estilo grep -rn)",
                      "example": '{"tool": "grep_search", "arguments": {"pattern": "TODO|FIXME", "path": "."}}'},
     "glob_files":   {"cat": "FS", "writes_fs": False, "desc": "Encuentra archivos por patrón glob (**/*.py)",
@@ -1134,6 +1138,8 @@ class ToolExecutor:
         patch: Optional[str] = None,
     ) -> str:
         """Edición quirúrgica resiliente: soporta rangos de líneas, diffs unificados o reemplazo exacto/fuzzy."""
+        if patch:
+            return self.apply_patch(filepath, str(patch))
         target = self.resolve_safe(filepath)
         self._check_writable("edit_file")
         if not target.exists():
@@ -1209,6 +1215,88 @@ class ToolExecutor:
         if len(diff_lines) > 40:
             diff_txt += "\n[…diff truncado…]"
         return f"OK: 1 reemplazo(s) en {filepath}\n\n```diff\n{diff_txt}\n```"
+
+
+    def apply_patch(self, filepath: str, patch: str) -> str:
+        """Aplica unified diff o bloques Aider SEARCH/REPLACE."""
+        self._check_writable("apply_patch")
+        raw = str(patch or "")
+        if not raw.strip():
+            raise ToolError("El campo 'patch' está vacío.")
+        path = self._safe(filepath)
+        existed = path.is_file()
+        text = path.read_text(encoding="utf-8", errors="replace") if existed else ""
+        new_text = None
+        if "<<<<<<< SEARCH" in raw:
+            blocks = re.findall(
+                r"<<<<<<< SEARCH\n(.*?)=======\n(.*?)>>>>>>> REPLACE",
+                raw, re.S,
+            )
+            if not blocks:
+                raise ToolError("Bloques SEARCH/REPLACE inválidos.")
+            new_text = text
+            for search, repl in blocks:
+                search = search.rstrip("\n")
+                repl = repl.rstrip("\n")
+                if not existed and not search.strip():
+                    new_text = (new_text + ("\n" if new_text else "") + repl)
+                    continue
+                n = new_text.count(search)
+                if n == 0:
+                    raise ToolError(
+                        f"SEARCH no encontrado en {filepath}. Contexto inicial:\n{text[:400]}"
+                    )
+                if n > 1:
+                    raise ToolError(
+                        f"SEARCH aparece {n} veces en {filepath}; no adivino. Añade contexto."
+                    )
+                new_text = new_text.replace(search, repl, 1)
+        else:
+            # unified diff: extrae líneas + / - del hunk
+            plus, minus = [], []
+            for line in raw.splitlines():
+                if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+                    continue
+                if line.startswith("+"):
+                    plus.append(line[1:])
+                elif line.startswith("-"):
+                    minus.append(line[1:])
+            old_chunk = "\n".join(minus)
+            new_chunk = "\n".join(plus)
+            if not existed and not old_chunk.strip():
+                new_text = new_chunk
+            elif old_chunk and old_chunk in text:
+                if text.count(old_chunk) > 1:
+                    raise ToolError("El hunk - aparece más de una vez; no adivino.")
+                new_text = text.replace(old_chunk, new_chunk, 1)
+            else:
+                raise ToolError("No pude aplicar el unified diff (hunk no coincide).")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(new_text, encoding="utf-8")
+        diff_lines = list(difflib.unified_diff(
+            text.splitlines(), new_text.splitlines(),
+            fromfile=f"a/{filepath}", tofile=f"b/{filepath}", lineterm="", n=2,
+        ))
+        body = "\n".join(diff_lines[:80]) or "(sin cambios de línea)"
+        return f"OK: patch aplicado a {filepath}\n\n```diff\n{body}\n```"
+
+    def git_commit(self, message: str, paths: Any = None) -> str:
+        msg = str(message or "").strip()
+        if not msg:
+            raise ToolError("message vacío.")
+        low = msg.lower()
+        if "--amend" in low or "push --force" in low or " -f" in f" {low}":
+            raise ToolError("Denegado: amend / force no permitidos.")
+        files = []
+        if isinstance(paths, list):
+            files = [str(p) for p in paths if str(p).strip()]
+        if files:
+            for f in files:
+                self._safe(f)
+            self._git("add", "--", *files)
+        else:
+            self._git("add", "-A")
+        return self._git("commit", "-m", msg)
 
     def semantic_search(self, query: str, top_k: int = 4) -> str:
         """Búsqueda semántica usando embeddings vectoriales en sqlite-vec."""
@@ -1808,6 +1896,10 @@ class ToolExecutor:
                 output = self.vault_read(args.get("path", ""))
             elif canonical == "vault_write":
                 output = self.vault_write(args.get("path", ""), args.get("content", ""))
+            elif canonical == "apply_patch":
+                output = self.apply_patch(args.get("filepath", ""), args.get("patch", ""))
+            elif canonical == "git_commit":
+                output = self.git_commit(args.get("message", ""), args.get("paths"))
             elif canonical == "edit_file":
                 output = self.edit_file(
                     filepath=args.get("filepath", ""),

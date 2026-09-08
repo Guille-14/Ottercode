@@ -244,13 +244,10 @@ CORE_AGENTS: Dict[str, Agent] = {
              "semantic_search", "index_workspace", "finalizar"]),
         icon="🦦", color_neon="#22d3ee",
         tools_disponibles=[
-            "read_file", "write_file", "append_file", "edit_file", "mkdir",
+            "read_file", "write_file", "append_file", "edit_file", "apply_patch", "mkdir",
             "list_dir", "tree", "grep_search", "glob_files", "execute_bash",
-            "python_exec", "git_status", "git_diff", "git_log", "sqlite_query",
-            "csv_peek", "json_query", "todo_write", "todo_read",
-            "http_request", "web_search", "web_fetch", "sys_info",
-            "hash_text", "base64_code", "uuid_gen", "pypi_info", "npm_search",
-            "ollama_consult", "vault_read", "vault_write",
+            "git_status", "git_diff", "git_log", "git_commit",
+            "todo_write", "todo_read",
             "semantic_search", "index_workspace", "finalizar"],
     ),
     "architect": Agent(

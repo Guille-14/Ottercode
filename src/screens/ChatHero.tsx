@@ -53,10 +53,9 @@ export default function ChatHero({
         ficheros y ejecución en sandbox.
       </p>
       <ol className="mt-4 max-w-md space-y-1 text-left text-xs text-muted">
-        <li>1. Elige un modelo en Ollama (o pulsa las tarjetas de abajo).</li>
-        <li>2. En Ajustes puedes fijar la carpeta de tu repo.</li>
-        <li>3. En Avanzado, «Sin confirmar» desactiva permisos de escritura.</li>
-        <li>4. /ultraplan para planificar; Ejecutar cuando apruebes.</li>
+        <li>1. Arranca Ollama (`ollama serve`).</li>
+        <li>2. `ollama pull qwen2.5-coder:7b` (o elige un modelo abajo).</li>
+        <li>3. Escribe la primera tarea en el chat.</li>
       </ol>
 
       <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-3 py-1 text-xs text-muted">

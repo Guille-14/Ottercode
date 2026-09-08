@@ -172,6 +172,25 @@ export default function ChatInputBar({
       setTask('')
       return
     }
+    if (parsed.action === '/help') {
+      const help = SLASH_COMMANDS.map((c) => `${c.cmd} — ${c.desc}`).join('\n')
+      useUi.setState((s) => ({
+        mission: [
+          ...s.mission,
+          { id: Date.now(), at: Date.now(), name: 'system', data: { text: 'Comandos:\n' + help } },
+        ],
+      }))
+      setTask('')
+      return
+    }
+    if (parsed.action === '/project') {
+      const path = String(parsed.fields.project_path || '').trim()
+      if (path) {
+        api.setProject(path).then(() => useUi.getState().setNotice(`Proyecto: ${path}`)).catch((e: Error) => useUi.getState().setNotice(e.message))
+      }
+      setTask('')
+      return
+    }
     const modelField = parsed.fields.model
     if (typeof modelField === 'string' && modelField.trim()) {
       useUi.getState().setModel(modelField.trim())

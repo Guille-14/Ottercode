@@ -133,8 +133,14 @@ function StudioCodeViewer({
           </button>
         </div>
       </header>
-      <textarea className="oc-mono flex-1 resize-none overflow-auto bg-transparent p-4 text-xs leading-relaxed text-ink outline-none"
-        value={code} onChange={(e) => onChange(e.target.value)} spellCheck={false} />
+      <textarea className="pane-code oc-mono flex-1 resize-none overflow-auto bg-transparent p-4 text-xs leading-relaxed text-ink outline-none"
+        value={code} onChange={(e) => onChange(e.target.value)} spellCheck={false}
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+            e.preventDefault()
+            onSave()
+          }
+        }} />
     </div>
   )
 }

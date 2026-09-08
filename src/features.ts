@@ -9,7 +9,7 @@ import { toolCallFilepath, normPath } from './sse'
 
 export interface SlashResult {
   fields: Record<string, unknown>
-  action?: '/reset' | '/save' | '/focus'
+  action?: '/reset' | '/save' | '/focus' | '/help' | '/project'
 }
 
 export const SLASH_COMMANDS: { cmd: string; desc: string }[] = [
@@ -23,6 +23,8 @@ export const SLASH_COMMANDS: { cmd: string; desc: string }[] = [
   { cmd: '/save', desc: 'Exportar el transcurso a Markdown' },
   { cmd: '/focus', desc: 'Alternar modo foco (ocultar barra lateral)' },
   { cmd: '/yolo', desc: 'Ejecutar directo con developer, sin revisión previa' },
+  { cmd: '/help', desc: 'Lista los comandos slash' },
+  { cmd: '/project', desc: 'Carpeta de proyecto: /project <ruta>' },
 ]
 
 export function applySlash(line: string): SlashResult {
@@ -50,6 +52,10 @@ export function applySlash(line: string): SlashResult {
       return { fields: {}, action: '/focus' }
     case '/yolo':
       return { fields: { task: arg || 'ejecutar', start_agent: 'developer', mode: 'chain', yolo: true } }
+    case '/help':
+      return { fields: {}, action: '/help' }
+    case '/project':
+      return { fields: { project_path: arg }, action: '/project' }
     default:
       if (cmd.startsWith('/') && cmd.length > 1) {
         const skill = cmd.slice(1)

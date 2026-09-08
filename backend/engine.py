@@ -12,7 +12,7 @@ PENDING_PERMISSIONS: Dict[str, threading.Event] = {}
 PERMISSION_RESPONSES: Dict[str, bool] = {}
 ASK_PERMISSIONS = os.environ.get("OTTERCODE_ASK_PERMISSIONS", "1").strip().lower() not in ("0", "false", "no")
 _DANGEROUS_TOOLS = {"python_exec", "execute_bash"}
-_WRITE_FS_TOOLS = {"write_file", "append_file", "edit_file", "mkdir"}
+_WRITE_FS_TOOLS = {"write_file", "append_file", "edit_file", "apply_patch", "mkdir", "git_commit"}
 
 
 def _path_outside_workspace(run: Any, args: Dict[str, Any]) -> bool:
@@ -1169,7 +1169,7 @@ def compact_run_now(run: Any, agent_id: str = "agent") -> Dict[str, Any]:
     return {"ok": True, "summary": (summ or "")[:800], **ev}
 
 
-_WRITE_TOOLS = {"write_file", "append_file", "edit_file", "mkdir", "python_exec"}
+_WRITE_TOOLS = {"write_file", "append_file", "edit_file", "apply_patch", "mkdir", "python_exec", "git_commit"}
 _EXPLORE_TOOLS = {"tree", "list_dir", "read_file", "grep_search", "glob_files",
                   "web_search", "web_fetch", "wikipedia_search",
                   "execute_bash", "git_status"}
