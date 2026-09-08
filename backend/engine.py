@@ -2,16 +2,41 @@ import os
 import threading
 import uuid
 import tools
+from pathlib import Path
 from typing import Iterator, Optional, Dict, Any
 
 # FASE 5 · Gate de permisos para herramientas destructivas
 PENDING_PERMISSIONS: Dict[str, threading.Event] = {}
 PERMISSION_RESPONSES: Dict[str, bool] = {}
 ASK_PERMISSIONS = os.environ.get("OTTERCODE_ASK_PERMISSIONS", "1").strip().lower() not in ("0", "false", "no")
-_DANGEROUS_TOOLS = {
-    "write_file", "append_file", "edit_file", "mkdir",
-    "python_exec", "execute_bash",
-}
+_DANGEROUS_TOOLS = {"python_exec", "execute_bash"}
+_WRITE_FS_TOOLS = {"write_file", "append_file", "edit_file", "mkdir"}
+
+
+def _path_outside_workspace(run: Any, args: Dict[str, Any]) -> bool:
+    fp = str(args.get("filepath") or args.get("path") or "").strip()
+    if not fp:
+        return False
+    p = Path(fp).expanduser()
+    if not p.is_absolute():
+        return False
+    try:
+        p.resolve().relative_to(Path(run.workdir).resolve())
+        return False
+    except ValueError:
+        return True
+
+
+def _needs_permission(run: Any, name: str, args: Dict[str, Any]) -> bool:
+    if not ASK_PERMISSIONS or getattr(run, "yolo", False):
+        return False
+    if getattr(run, "_session_allow", False):
+        return False
+    if name in _DANGEROUS_TOOLS or str(name).startswith("mcp__"):
+        return True
+    if name in _WRITE_FS_TOOLS and _path_outside_workspace(run, args):
+        return True
+    return False
 
 from backend.vault import memory_note_for_run  # noqa: E402
 from backend.runtime import _activity_finish  # noqa: E402
@@ -338,16 +363,15 @@ def _run_native_tool(run: Any, agent_id: str, iteration: int, executor: Any, cal
         return {"ok": False, "output": "sin herramienta"}
 
     args = alias_args(name, args)
-    ask = ASK_PERMISSIONS and not getattr(run, "yolo", False)
-    if ask and name in _DANGEROUS_TOOLS:
+    if _needs_permission(run, name, args):
         perm_id = str(uuid.uuid4())
         PENDING_PERMISSIONS[perm_id] = threading.Event()
         yield {"kind": "perm", "id": perm_id, "tool": name, "args": args,
                "title": tools.tool_title(name, args)}
         PENDING_PERMISSIONS[perm_id].wait(timeout=300)
-        allowed = PERMISSION_RESPONSES.pop(perm_id, False)
+        perm_ok = PERMISSION_RESPONSES.pop(perm_id, False)
         PENDING_PERMISSIONS.pop(perm_id, None)
-        if not allowed:
+        if not perm_ok:
             msg = f"ACCESO DENEGADO: usuario denegó '{name}'"
             yield {"kind": "result", "name": name, "ok": False, "output": msg}
             return {"ok": False, "output": msg}
@@ -653,17 +677,21 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
             run.messages.append({"role": "user", "content": error_msg})
             continue
 
-        # FASE 5 · Gate de permisos (YOLO lo desactiva)
-        if ASK_PERMISSIONS and not getattr(run, "yolo", False) and tool_name in _DANGEROUS_TOOLS:
+        if _needs_permission(run, tool_name, args):
             perm_id = str(uuid.uuid4())
             PENDING_PERMISSIONS[perm_id] = threading.Event()
             yield sse(SseEvent.perm_request, {
                 "id": perm_id, "tool": tool_name, "args": args, "title": title
             })
             PENDING_PERMISSIONS[perm_id].wait(timeout=300)
-            allowed = PERMISSION_RESPONSES.pop(perm_id, False)
+            perm_ok = PERMISSION_RESPONSES.pop(perm_id, False)
             PENDING_PERMISSIONS.pop(perm_id, None)
-            if not allowed:
+            try:
+                append_checkpoint(run, kind="perm", done=f"{tool_name} {'ok' if perm_ok else 'deny'}",
+                                  decisions=title, pending="", next_action="continuar")
+            except Exception:
+                pass
+            if not perm_ok:
                 error_msg = f"ACCESO DENEGADO: usuario denegó '{tool_name}'"
                 yield sse(SseEvent.tool_call, {
                     "id": call_id, "agent": agent_id, "iteration": iteration,

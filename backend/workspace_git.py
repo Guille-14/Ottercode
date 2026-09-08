@@ -44,6 +44,17 @@ def ensure_mission_git(workdir: Path, task_id: str) -> Dict[str, Any]:
     return {"ok": True, "mode": "branch", "branch": branch, "path": str(workdir)}
 
 
+def reset_mission(workdir: Path) -> Dict[str, Any]:
+    """Deshace cambios de la misión: git reset --hard HEAD."""
+    workdir = Path(workdir)
+    if not (workdir / ".git").exists():
+        return {"ok": False, "reason": "no git"}
+    r = _run(workdir, "reset", "--hard", "HEAD")
+    if r.returncode != 0:
+        return {"ok": False, "reason": (r.stderr or r.stdout or "reset failed")[:300]}
+    return {"ok": True, "mode": "reset"}
+
+
 def maybe_auto_rag(workdir: Path) -> None:
     """Indexa el workspace en segundo plano al abrirlo (OTTERCODE_AUTO_RAG=1)."""
     if os.environ.get("OTTERCODE_AUTO_RAG", "1").strip() in ("0", "false", "no"):

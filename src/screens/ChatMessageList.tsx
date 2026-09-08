@@ -180,7 +180,17 @@ function PlanCard({
         <Button onClick={() => void startMission({ task: original || 'ejecutar plan aprobado', model, mode: 'chat', start_agent: 'agent', resume_plan: { plan, context }, resume_task: original, continue_task: taskId || undefined })}>Ejecutar</Button>
         <Button variant="ghost" onClick={() => setEditing((v) => !v)}>{editing ? 'Vista' : 'Editar'}</Button>
         <Button variant="ghost" onClick={() => void startMission({ task: `Regenera el plan: ${plan.slice(0, 400)}`, model, mode: 'chat', start_agent: 'agent', plan_only: true, continue_task: taskId || undefined })}>Regenerar</Button>
-        <Button variant="ghost" onClick={() => setPlan('')}>Rechazar</Button>
+        <Button variant="ghost" onClick={() => {
+          const reason = window.prompt('Motivo del rechazo (opcional)') || ''
+          setPlan('')
+          void startMission({
+            task: reason
+              ? `El usuario rechazó el plan. Motivo: ${reason}. Propón un enfoque distinto.`
+              : 'El usuario rechazó el plan. Propón un enfoque distinto.',
+            model, mode: 'chat', start_agent: 'agent', plan_only: true,
+            continue_task: taskId || undefined,
+          })
+        }}>Rechazar</Button>
       </div>
     </div>
   )

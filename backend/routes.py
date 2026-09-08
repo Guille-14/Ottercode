@@ -1432,6 +1432,7 @@ def api_skills_enable(req: SkillEnableRequest) -> Dict[str, Any]:
 class ApproveRequest(BaseModel):
     id: str
     allow: bool
+    always: bool = False
 
 @router.get(Route.PROJECT)
 def api_project_get() -> Dict[str, Any]:
@@ -1480,11 +1481,21 @@ def api_mcp() -> Dict[str, Any]:
         return {"ok": False, "ready": False, "servers": [], "tools": [], "error": str(exc)}
 
 
+@router.post("/api/mission/undo")
+def api_mission_undo(task_id: Optional[str] = None) -> Dict[str, Any]:
+    workdir, tid = _resolve_workspace(task_id)
+    from backend.workspace_git import reset_mission
+    return {**reset_mission(workdir), "task_id": tid}
+
+
 @router.post("/api/approve")
 def api_approve(req: ApproveRequest):
     from backend.engine import PENDING_PERMISSIONS, PERMISSION_RESPONSES
     if req.id in PENDING_PERMISSIONS:
         PERMISSION_RESPONSES[req.id] = req.allow
+        if req.always and req.allow:
+            for _run in list(ACTIVE_RUN.values()):
+                setattr(_run, "_session_allow", True)
         PENDING_PERMISSIONS[req.id].set()
         return {"ok": True}
     return {"ok": False, "detail": "Solicitud no encontrada"}

@@ -106,11 +106,14 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
             <p className="mt-1 text-xs text-muted">
               La herramienta solicitada requiere tu confirmación antes de ejecutarse en el sistema.
             </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => approvePerm(pendingPerm.id, false)}>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <Button variant="ghost" onClick={() => void approvePerm(pendingPerm.id, false)}>
                 Denegar
               </Button>
-              <Button onClick={() => approvePerm(pendingPerm.id, true)}>
+              <Button variant="ghost" onClick={() => void approvePerm(pendingPerm.id, true, true)}>
+                Siempre esta sesión
+              </Button>
+              <Button onClick={() => void approvePerm(pendingPerm.id, true)}>
                 Aprobar
               </Button>
             </div>

@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import {
   MessageSquare, Users, Box, Wrench, Plus, Search, Trash2,
-  Bell, Menu, Activity, Focus, Bot, Settings, Zap, Hash, Sun, Moon,
+  Bell, Menu, Activity, Focus, Bot, Settings, Zap, Hash,
 } from 'lucide-react'
 import Estado from './screens/Estado'
 import Misiones from './screens/Misiones'
@@ -64,13 +64,6 @@ export default function App() {
   const taskId = useUi((s) => s.taskId)
   const mission = useUi((s) => s.mission)
   const streaming = useUi((s) => s.streaming)
-  const theme = useUi((s) => s.theme)
-  const toggleTheme = useUi((s) => s.toggleTheme)
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark')
-    document.documentElement.style.colorScheme = theme
-  }, [theme])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [palette, setPalette] = useState(false)
   const [hwOpen, setHwOpen] = useState(false)
@@ -277,15 +270,6 @@ export default function App() {
           </div>
           <div className="flex items-center gap-1.5">
             <TokenStats />
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="rounded-lg p-1.5 text-muted hover:bg-panel hover:text-ink"
-              title={theme === 'dark' ? 'Tema claro' : 'Tema oscuro'}
-              aria-label="Invertir colores"
-            >
-              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </button>
             <button
               type="button"
               onClick={askNotify}

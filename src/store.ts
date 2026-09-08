@@ -32,9 +32,6 @@ interface UiState {
   pendingPerm: { id: string; tool: string; title: string } | null
   focus: boolean
   composerDraft: string
-  theme: 'light' | 'dark'
-  toggleTheme: () => void
-
   model: string
   artifactsOpen: boolean
   loopMode: boolean
@@ -61,7 +58,7 @@ interface UiState {
   toggleFocus: () => void
   setComposerDraft: (d: string) => void
   clearComposerDraft: () => void
-  approvePerm: (id: string, allow: boolean) => Promise<void>
+  approvePerm: (id: string, allow: boolean, always?: boolean) => Promise<void>
 }
 
 let seq = 0
@@ -93,15 +90,6 @@ export const useUi = create<UiState>()(
       pendingPerm: null,
       focus: false,
       composerDraft: '',
-      theme: 'light',
-      toggleTheme: () =>
-        set((s) => {
-          const theme = s.theme === 'dark' ? 'light' : 'dark'
-          document.documentElement.classList.toggle('dark', theme === 'dark')
-          document.documentElement.style.colorScheme = theme
-          return { theme }
-        }),
-
       model: 'qwen3.5:4b',
       artifactsOpen: true,
       loopMode: false,
@@ -138,12 +126,12 @@ export const useUi = create<UiState>()(
       toggleFocus: () => set((s) => ({ focus: !s.focus })),
       setComposerDraft: (d) => set({ composerDraft: d }),
       clearComposerDraft: () => set({ composerDraft: '' }),
-      approvePerm: async (id, allow) => {
+      approvePerm: async (id, allow, always) => {
         set({ pendingPerm: null })
         await fetchWithAuth('/api/approve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, allow }),
+          body: JSON.stringify({ id, allow, always: Boolean(always) }),
         })
       },
       stopMission: (abort: boolean) => {
@@ -270,19 +258,17 @@ export const useUi = create<UiState>()(
     }),
     {
       name: 'otter-storage',
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         taskId: state.taskId,
         mission: state.mission,
 
-        theme: state.theme,
         model: state.model,
         artifactsOpen: state.artifactsOpen,
         loopMode: state.loopMode,
         maxRounds: state.maxRounds,
         hacker: state.hacker,
-        yolo: state.yolo,
       }),
     },
   ),

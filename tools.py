@@ -484,9 +484,25 @@ class ToolExecutor:
         if content is None:
             raise ToolError("El campo 'content' no puede ser null.")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(content), encoding="utf-8")
+        old = ""
+        if path.exists() and path.is_file():
+            try:
+                old = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                old = ""
+        new = str(content)
+        path.write_text(new, encoding="utf-8")
         rel = path.relative_to(self.workdir)
-        return f"OK: {len(str(content))} caracteres escritos en {rel}"
+        diff_lines = list(difflib.unified_diff(
+            old.splitlines(), new.splitlines(),
+            fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm="", n=2,
+        ))
+        if not diff_lines:
+            return f"OK: {len(new)} caracteres escritos en {rel} (sin cambios)"
+        body = "\n".join(diff_lines[:80])
+        if len(diff_lines) > 80:
+            body += "\n[…diff truncado…]"
+        return f"OK: {len(new)} caracteres escritos en {rel}\n\n```diff\n{body}\n```"
 
     def append_file(self, filepath: str, content: str) -> str:
         """AÑADE contenido al final del archivo (lo crea si no existe).
