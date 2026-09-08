@@ -399,11 +399,23 @@ def build_reviewer_prompt(run: "OtterRun", plan: str) -> str:
     return "\n\n".join(parts)
 
 
+def _workspace_inventory(run: "OtterRun", limit: int = 32) -> str:
+    lines: List[str] = []
+    try:
+        for f in run.executor.list_workspace()[:limit]:
+            p = f.get("path") if isinstance(f, dict) else str(f)
+            sz = f.get("size") if isinstance(f, dict) else 0
+            if not p or str(p).startswith("."):
+                continue
+            lines.append(f"- {p} ({sz} B)")
+    except Exception:
+        pass
+    return "\n".join(lines) if lines else "(workspace vacío)"
+
+
 def build_chat_prompt(run: "OtterRun", task_text: Optional[str] = None) -> str:
     start = get_agent(run.start_agent)
     txt = task_text if task_text is not None else run.task_text
-    # v4.3 · el modo Claude Code lleva su propio marcador (el modelo así
-    # sabe que es EL agente con tools, no un chat pasivo)
     hdr = ("# AGENTE OTTER — MODO CLAUDE CODE" if run.start_agent == "agent"
            else "# CHAT DIRECTO — BALSA OTTERCODE")
     parts = [
@@ -413,6 +425,25 @@ def build_chat_prompt(run: "OtterRun", task_text: Optional[str] = None) -> str:
         "workspace, usa tus skills.",
         f"USUARIO:\n{txt}",
     ]
+    if getattr(run, "continue_task", ""):
+        inv = _workspace_inventory(run)
+        orig = ""
+        try:
+            meta_path = WORKSPACE_ROOT / str(run.continue_task) / "ottercode_transcript.json"
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                orig = str((data.get("meta") or {}).get("task") or "")[:800]
+        except Exception:
+            orig = ""
+        parts.append(
+            "# HILO CONTINUADO — NO EMPIECES UN PROYECTO NUEVO\n"
+            "El usuario dice continuar / seguir. Debes ITERAR el trabajo YA "
+            "existente. PROHIBIDO crear una landing, web de nutrias, demo de "
+            "OtterCode u otro proyecto distinto. Lee tree/read_file y aplica "
+            "SOLO lo que pide ahora sobre los archivos que hay.\n"
+            + (f"MISIÓN ORIGINAL:\n{orig}\n" if orig else "")
+            + f"ARCHIVOS EN DISCO:\n{inv}"
+        )
     if getattr(run, "memory_block", ""):
         parts.append(
             "# MEMORIA PERSISTENTE (tu cerebro Obsidian)\n"
@@ -425,30 +456,43 @@ def build_chat_prompt(run: "OtterRun", task_text: Optional[str] = None) -> str:
 
 def _prev_conversation_block(task_id: str, max_entries: int = 16,
                              max_chars: int = 700) -> str:
-    """🧵 Continuidad conversacional: bloque con las últimas entradas
-    user/agent del transcript de la misión anterior, para que el agente
-    itere sobre el hilo previo en vez de empezar de cero."""
+    """🧵 Continuidad: el JSON en disco es {meta, transcript}, no una lista."""
     path = WORKSPACE_ROOT / str(task_id) / "ottercode_transcript.json"
     try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return ""
-    if not isinstance(entries, list):
+    meta: Dict[str, Any] = {}
+    entries: List[Any] = []
+    if isinstance(data, dict):
+        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+        raw = data.get("transcript")
+        entries = raw if isinstance(raw, list) else []
+    elif isinstance(data, list):
+        entries = data
+    else:
         return ""
     conv = [e for e in entries
             if isinstance(e, dict) and e.get("kind") in ("user", "agent")]
-    if not conv:
-        return ""
     lines = ["# CONVERSACIÓN PREVIA CON ESTE USUARIO "
              "(mismo proyecto; los archivos ya están en tu workspace)"]
+    orig = str(meta.get("task") or "").strip()
+    if orig:
+        lines.append(f"<MISIÓN ORIGINAL>: {orig[:800]}")
+    if not conv and not orig:
+        return ""
     for e in conv[-max_entries:]:
         who = "<USUARIO>" if e.get("kind") == "user" else "<OTTER>"
-        txt = str(e.get("text") or "").strip()
+        txt = str(e.get("text") or e.get("content") or "").strip()
+        if not txt:
+            continue
         if len(txt) > max_chars:
             txt = txt[:max_chars] + "…"
         lines.append(f"{who}: {txt}")
-    lines.append("El usuario continúa la conversación: itera sobre lo que ya hay "
-                 "(los archivos están en tu workspace), no empieces de cero.")
+    lines.append(
+        "El usuario continúa: itera sobre lo que ya hay. "
+        "NO empieces de cero. NO inventes una web de nutrias ni un demo."
+    )
     return "\n".join(lines)
 
 

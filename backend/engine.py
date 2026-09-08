@@ -1491,8 +1491,11 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
             # bloque mayor como archivo ANTES de dar la misión por terminada.
             _rescue_needed_chat = False
             rescued = ""                       # v5.1 · definido SIEMPRE (evita NameError)
-            if not getattr(run, "plan_only", False) and _should_rescue(
-                    last_text_chat or "", getattr(run, "_turn_tools", set())):
+            _skip_rescue = bool(getattr(run, "continue_task", "")
+                                and getattr(run, "_files_ever_written", False))
+            if (not _skip_rescue and not getattr(run, "plan_only", False)
+                    and _should_rescue(
+                    last_text_chat or "", getattr(run, "_turn_tools", set()))):
                 _rescue_needed_chat = True
                 run._rescue_truncated = False
                 rescued = (yield from _rescue_code_from_text(

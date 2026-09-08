@@ -920,10 +920,13 @@ def api_task(req: TaskRequest) -> StreamingResponse:
         _init_user = run.transcript[0]          # entrada user del turno actual
         _init_sys = [e for e in run.transcript if e.get("kind") == "system"]
         run.transcript = list(prev_transcript) + [_init_user] + _init_sys
-        if prev_meta and isinstance(prev_meta, dict):
-            pass  # conservamos el task inicial del run (el de la misión)
-    else:
-        pass  # __init__ ya registró la entrada user y el system ⚓
+        try:
+            existing = [f for f in run.executor.list_workspace()
+                        if not str((f.get("path") if isinstance(f, dict) else f) or "").startswith(".")]
+            if existing:
+                run._files_ever_written = True
+        except Exception:
+            pass
 
     run.memory_block = _memory_recall(run.task_text)   # 🧠 recuerdo del vault
     if req.resume_checkpoint:
