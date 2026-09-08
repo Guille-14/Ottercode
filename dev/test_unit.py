@@ -42,10 +42,51 @@ def test_api_url_ignored():
 
 
 def test_native_gate():
+    os.environ.pop("OTTERCODE_NATIVE_TOOLS", None)
     assert native_tools_enabled("qwen2.5-coder:7b") is True
     os.environ["OTTERCODE_NATIVE_TOOLS"] = "off"
-    # function reads NATIVE_TOOLS_MODE at import; check auto via name
+    assert native_tools_enabled("qwen2.5-coder:7b") is False
+    os.environ["OTTERCODE_NATIVE_TOOLS"] = "on"
+    assert native_tools_enabled("tinyllama") is True
     os.environ.pop("OTTERCODE_NATIVE_TOOLS", None)
+
+
+def test_llm_request_allowlist():
+    os.environ["OTTERCODE_NATIVE_TOOLS"] = "on"
+    from backend.ollama import _llm_request
+    from backend.runstate import OtterRun
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        run = OtterRun("t", "x", "qwen2.5-coder:7b", False, "chat", "agent", Path(d))
+        run._native_allowed = ["read_file", "write_file"]
+        url, payload = _llm_request(run, "sys", "hola", agent_id="agent")
+        assert "/api/chat" in url
+        names = [t["function"]["name"] for t in payload.get("tools") or []]
+        assert "read_file" in names
+        assert "weather" not in names
+        assert payload["options"]["temperature"] == 0.2
+    os.environ.pop("OTTERCODE_NATIVE_TOOLS", None)
+
+
+def test_gitignore_glob():
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, ".gitignore").write_text("secret.txt\nnode_modules\n")
+        Path(d, "secret.txt").write_text("x")
+        Path(d, "ok.py").write_text("y")
+        (Path(d) / "node_modules").mkdir()
+        (Path(d) / "node_modules" / "a.js").write_text("z")
+        ex = tools.ToolExecutor(d)
+        r = ex.dispatch("glob_files", {"pattern": "**/*"})
+        assert r["ok"]
+        assert "ok.py" in r["output"]
+        assert "secret.txt" not in r["output"]
+
+
+def test_developer_has_patch():
+    from backend.agents import get_agent
+    d = get_agent("developer")
+    assert "apply_patch" in d.tools_disponibles
+    assert "git_commit" in d.tools_disponibles
 
 
 def test_apply_patch_search_replace():

@@ -126,7 +126,7 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
                 Siempre esta sesión
               </Button>
               <Button onClick={() => void approvePerm(pendingPerm.id, true)}>
-                Aprobar
+                Una vez
               </Button>
             </div>
           </Card>

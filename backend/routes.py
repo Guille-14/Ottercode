@@ -301,7 +301,7 @@ def api_settings_apply_profile() -> Dict[str, Any]:
     active = _otter_profiles._ACTIVE_PROFILE or {}
     name = active.get("name") or "default"
     prof = _otter_profiles._get_profile(name) or active
-    prof["temperature"] = s.get("temperature", 0.7)
+    prof["temperature"] = s.get("temperature", 0.2)
     prof["top_p"] = s.get("top_p", 0.9)
     prof["num_ctx"] = s.get("num_ctx", NUM_CTX_DEFAULT)
     try:
@@ -896,11 +896,11 @@ def api_task(req: TaskRequest) -> StreamingResponse:
 
     run = OtterRun(
         task_id, req.task.strip(),
-        req.model.strip() or _task_profile.get("model", DEFAULT_MODEL),
+        resolve_coder_model(req.model.strip() or _task_profile.get("model", DEFAULT_MODEL)),
         req.loop_mode, req.mode, req.start_agent, workdir,
         hacker=bool(req.hacker),
         num_ctx=req.num_ctx or _task_profile.get("num_ctx"),
-        temperature=_task_profile.get("temperature", 0.7),
+        temperature=_task_profile.get("temperature", 0.2),
         top_p=_task_profile.get("top_p", 0.9),
         goal=req.goal, plan_only=req.plan_only,
         ultra_review=req.ultra_review, resume_plan=req.resume_plan,

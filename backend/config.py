@@ -182,13 +182,16 @@ _NATIVE_AUTO_MARKERS = (
 
 
 def native_tools_enabled(model: str) -> bool:
-    mode = (NATIVE_TOOLS_MODE or "auto").strip().lower()
+    mode = (os.environ.get("OTTERCODE_NATIVE_TOOLS", NATIVE_TOOLS_MODE) or "auto").strip().lower()
     if mode in ("on", "1", "true", "yes"):
         return True
     if mode in ("off", "0", "false", "no"):
         return False
     name = (model or "").lower()
     return any(m in name for m in _NATIVE_AUTO_MARKERS)
+
+
+
 # Compactación automática: si el turno acumula más caracteres que esto, se
 # resume el trabajo previo y se libera el historial (estilo Claude Code).
 # 30k chars ≈ 8k tokens: prompt + generación conviven holgados en 16k ctx.

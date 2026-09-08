@@ -102,9 +102,9 @@ function Explorer({ onOpen, selected }: { onOpen: (p: string) => void; selected:
 }
 
 function StudioCodeViewer({
-  code, path, onChange, onSave, dirty, saving,
+  code, path, onChange, onSave, dirty, saving, saveErr,
 }: {
-  code: string; path: string; onChange: (v: string) => void; onSave: () => void; dirty: boolean; saving: boolean
+  code: string; path: string; onChange: (v: string) => void; onSave: () => void; dirty: boolean; saving: boolean; saveErr?: string
 }) {
   const [copied, setCopied] = useState(false)
   const handleCopy = () => {
@@ -120,6 +120,7 @@ function StudioCodeViewer({
           <FileCode className="h-4 w-4 text-accent shrink-0" />
           <span className="text-xs font-semibold text-muted truncate">{path.split('/').pop()}</span>
           {dirty && <span className="text-[10px] text-accent">sin guardar</span>}
+          {saveErr && <span className="text-[10px] text-danger truncate max-w-[12rem]" title={saveErr}>{saveErr}</span>}
         </div>
         <div className="flex gap-1.5">
           <button type="button" onClick={onSave} disabled={!dirty || saving}
@@ -151,6 +152,7 @@ export default function Studio() {
   const [saved, setSaved] = useState('')
   const [saving, setSaving] = useState(false)
   const [loadErr, setLoadErr] = useState('')
+  const [saveErr, setSaveErr] = useState('')
   const [openPath, setOpenPath] = useState(studio?.path ?? '')
 
   const taskId = studio?.taskId ?? ''
@@ -165,6 +167,7 @@ export default function Studio() {
       return
     }
     setLoadErr('')
+    setSaveErr('')
     setContent('')
     fetchWithAuth(api.fileUrl(taskId, openPath))
       .then((r) => {
@@ -179,9 +182,10 @@ export default function Studio() {
   const handleSave = () => {
     if (!taskId || !openPath || !dirty) return
     setSaving(true)
+    setSaveErr('')
     api.saveFile(taskId, openPath, content)
       .then(() => setSaved(content))
-      .catch((e) => setLoadErr((e as Error).message))
+      .catch((e) => setSaveErr((e as Error).message))
       .finally(() => setSaving(false))
   }
   const hard = useMemo(() => F.hardenSrcdoc(content), [content])

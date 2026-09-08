@@ -1379,6 +1379,32 @@ class ToolExecutor:
                         break
         return "\n".join(hits) if hits else f"(sin coincidencias para /{pat}/)"
 
+    def _gitignore_specs(self) -> List[str]:
+        specs: List[str] = []
+        gi = self.workdir / ".gitignore"
+        if gi.is_file():
+            try:
+                for line in gi.read_text(encoding="utf-8", errors="replace").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        specs.append(line.rstrip("/"))
+            except OSError:
+                pass
+        return specs
+
+    def _is_gitignored(self, p: Path) -> bool:
+        import fnmatch
+        try:
+            rel = str(p.relative_to(self.workdir)).replace("\\", "/")
+        except ValueError:
+            return False
+        for spec in self._gitignore_specs():
+            if fnmatch.fnmatch(rel, spec) or fnmatch.fnmatch(p.name, spec) or fnmatch.fnmatch(rel, spec + "/*"):
+                return True
+            if any(fnmatch.fnmatch(part, spec) for part in Path(rel).parts):
+                return True
+        return False
+
     def glob_files(self, pattern: str = "**/*", max: int = GLOB_MAX_FILES) -> str:
         """Lista archivos por patrón glob relativo al workspace."""
         pat = str(pattern or "**/*").lstrip("/\\") or "**/*"
@@ -1395,6 +1421,8 @@ class ToolExecutor:
             if len(out) >= n:
                 break
             if p.is_symlink() or any(part in self._SKIP_DIRS for part in p.parts):
+                continue
+            if self._is_gitignored(p):
                 continue
             if p.is_dir():
                 out.append(f"📁 {p.relative_to(self.workdir)}/")

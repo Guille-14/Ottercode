@@ -15,7 +15,7 @@ SETTINGS_PATH = WORKSPACE_ROOT / "ollama_runtime.json"
 # Valores por defecto (iguales a los que el engine usa hoy).
 SETTINGS_DEFAULTS: Dict[str, Any] = {
     # Generación
-    "temperature": 0.7,
+    "temperature": 0.2,
     "top_p": 0.9,
     "top_k": 40,
     "min_p": 0.0,
@@ -122,7 +122,7 @@ def build_options(run: Any) -> Dict[str, Any]:
         "num_ctx": int(num_ctx),
         "num_predict": int(s.get("num_predict", NUM_PREDICT_DEFAULT)),
         "temperature": _solo_range(
-            getattr(run, "temperature", None) if getattr(run, "temperature", None) is not None else s.get("temperature"), 0.0, 2.0, 0.7),
+            getattr(run, "temperature", None) if getattr(run, "temperature", None) is not None else s.get("temperature"), 0.0, 2.0, 0.2),
         "top_p": _solo_range(
             getattr(run, "top_p", None) if getattr(run, "top_p", None) is not None else s.get("top_p"), 0.0, 1.0, 0.9),
         "top_k": int(s.get("top_k", 40)),

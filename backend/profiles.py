@@ -19,7 +19,7 @@ def _default_profile() -> Dict[str, Any]:
         "name": "default",
         "display_name": "🦦 Otter (Default)",
         "model": DEFAULT_MODEL,
-        "temperature": 0.7,
+        "temperature": 0.2,
         "top_p": 0.9,
         "num_ctx": NUM_CTX_DEFAULT,
         "system_override": "",
@@ -50,10 +50,10 @@ def _ensure_default_profiles() -> None:
         return
     defaults = [
         {"name": "default", "display_name": "🦦 Otter (Default)",
-         "model": DEFAULT_MODEL, "temperature": 0.7, "top_p": 0.9,
+         "model": DEFAULT_MODEL, "temperature": 0.2, "top_p": 0.9,
          "num_ctx": NUM_CTX_DEFAULT, "system_override": ""},
         {"name": "coder", "display_name": "💻 Coder",
-         "model": DEFAULT_MODEL, "temperature": 0.3, "top_p": 0.85,
+         "model": DEFAULT_MODEL, "temperature": 0.2, "top_p": 0.85,
          "num_ctx": NUM_CTX_DEFAULT,
          "system_override": "Eres un programador experto. Escribe código limpio, bien documentado y con buenas prácticas."},
         {"name": "writer", "display_name": "✍️ Writer",

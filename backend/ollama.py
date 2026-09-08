@@ -170,6 +170,22 @@ def invalidate_models_cache() -> None:
     _models_cache = None
 
 
+def resolve_coder_model(requested: str = "") -> str:
+    """Si el modelo pedido no está en /api/tags, usa DEFAULT_MODEL o el primero."""
+    want = (requested or DEFAULT_MODEL or "").strip()
+    tags = fetch_models() or []
+    if want and want in tags:
+        return want
+    if want:
+        base = want.split(":")[0]
+        for t in tags:
+            if t == want or t.startswith(base):
+                return t
+    if DEFAULT_MODEL in tags:
+        return DEFAULT_MODEL
+    return tags[0] if tags else want or DEFAULT_MODEL
+
+
 # ---------------------------------------------------------------------------
 # Errores amigables + stream de Ollama
 # ---------------------------------------------------------------------------
@@ -201,6 +217,12 @@ def _friendly_ollama_error(exc: Exception) -> str:
         return (
             "Ollama tardó demasiado en responder. El modelo puede estar cargando a "
             "VRAM por primera vez; reintenta la misión."
+        )
+    low = msg.lower()
+    if "out of memory" in low or ("cuda" in low and "memory" in low) or "vram" in low:
+        return (
+            "La GPU se ha quedado sin VRAM. Prueba un modelo más pequeño o "
+            "reduce num_ctx (Ajustes)."
         )
     return msg
 
@@ -417,7 +439,9 @@ def _llm_request(run: Any, system_prompt: str, prompt: str, agent_id: str = "") 
     keep = os.environ.get("OTTERCODE_KEEP_ALIVE", KEEP_ALIVE_DEFAULT)
     transport = getattr(run, "_transport", "chat")
     # FASE 3 · resolver temperature/top_p del run (viene del perfil)
-    _temp = getattr(run, "temperature", None) or 0.7
+    _temp = getattr(run, "temperature", None)
+    if _temp is None:
+        _temp = 0.2
     _top = getattr(run, "top_p", None) or 0.9
     _want_tools = native_tools_enabled(getattr(run, "model", "") or "") and agent_id != "reviewer"
     _allowed = getattr(run, "_native_allowed", None)
@@ -456,21 +480,14 @@ def _llm_request(run: Any, system_prompt: str, prompt: str, agent_id: str = "") 
         _messages.extend(_hist)
     else:
         _messages.append({"role": "user", "content": prompt})
-    # FASE 5 · Native Function Calling: enviar tools solo si el modelo es capaz
-    # El Revisor no necesita el catálogo entero de tools (~20k tok) y
-    # dispara overflow al auditar. El código está en disco.
-    _want_tools = any(m in run.model for m in TOOL_CAPABLE_MODELS) and agent_id != "reviewer"
-    _tools = tools.get_ollama_tools() if _want_tools else None
-    
-    return (
-        f"{OLLAMA_BASE_URL}/api/chat",
-        {
-            "model": run.model, "messages": _messages, "stream": True,
-            "keep_alive": keep,
-            "tools": _tools,
-            "options": _otter_settings.build_options(run),
-        },
-    )
+    payload = {
+        "model": run.model, "messages": _messages, "stream": True,
+        "keep_alive": keep,
+        "options": _otter_settings.build_options(run),
+    }
+    if _tools:
+        payload["tools"] = _tools
+    return (f"{OLLAMA_BASE_URL}/api/chat", payload)
 
 
 def _estimate_tokens(text: str) -> int:
