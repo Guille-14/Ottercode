@@ -1037,11 +1037,6 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
     else:
         yield sse(SseEvent.system, {
             "text": f"⚠️ Límite de skills por turno alcanzado ({max_steps}); el turno termina."
-        run.messages.append(
-            {"role": "user", "content": format_tool_result(tool_name, result)})
-    else:
-        yield sse(SseEvent.system, {
-            "text": f"⚠️ Límite de skills por turno alcanzado ({max_steps}); el turno termina."
         })
 
     yield sse(SseEvent.agent_end, {"agent": agent_id, "iteration": iteration, "steps": steps})
