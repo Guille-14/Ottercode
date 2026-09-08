@@ -1945,23 +1945,5 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
             save_session_to_db(run) # FASE 2 · SQLite + FTS5
         except Exception as _e:  # noqa: BLE001
             print(f"[WARN] Persistencia fallida para {run.task_id}: {_e}", flush=True)
-_name__,
-            "detail": detail,
-            "step": getattr(run, "_current_step", "") or "",
-            "task_id": run.task_id,
-        })
-        _activity_finish("error")
-    finally:
-        run.meta["approved"] = run.approved
-        run.meta["iterations"] = run.iterations
-        run.meta["files"] = run.executor.list_workspace()
-        run.meta["injected_agents"] = run.injected_agents
-        run.meta["duration_s"] = round(time.time() - started, 1)
-        try:
-            save_session(run)       # JSON legacy
-            save_session_to_db(run) # FASE 2 · SQLite + FTS5
-        except Exception as _e:  # noqa: BLE001
-            print(f"[WARN] Persistencia fallida para {run.task_id}: {_e}", flush=True)
-2 · SQLite + FTS5
         except Exception as _e:  # noqa: BLE001
             print(f"[WARN] Persistencia fallida para {run.task_id}: {_e}", flush=True)
