@@ -435,14 +435,34 @@ def build_chat_prompt(run: "OtterRun", task_text: Optional[str] = None) -> str:
                 orig = str((data.get("meta") or {}).get("task") or "")[:800]
         except Exception:
             orig = ""
+        tails: List[str] = []
+        try:
+            for f in run.executor.list_workspace()[:12]:
+                p = str(f.get("path") if isinstance(f, dict) else f)
+                if not p or p.startswith(".") or not p.lower().endswith(
+                    (".html", ".htm", ".js", ".css", ".py", ".md")
+                ):
+                    continue
+                try:
+                    body = (run.workdir / p).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if len(body) < 40:
+                    continue
+                tails.append(f"--- cola de {p} ({len(body)} chars) ---\n{body[-900:]}")
+        except Exception:
+            pass
         parts.append(
-            "# HILO CONTINUADO — NO EMPIECES UN PROYECTO NUEVO\n"
-            "El usuario dice continuar / seguir. Debes ITERAR el trabajo YA "
-            "existente. PROHIBIDO crear una landing, web de nutrias, demo de "
-            "OtterCode u otro proyecto distinto. Lee tree/read_file y aplica "
-            "SOLO lo que pide ahora sobre los archivos que hay.\n"
+            "# HILO CONTINUADO — EDITA, NO REGENERES\n"
+            "Los archivos YA EXISTEN. PROHIBIDO write_file sobre ellos "
+            "(borra el trabajo y gasta tokens). "
+            "• Línea mal / trozo concreto → edit_file (old_string exacto).\n"
+            "• Añadir al final / seguir el HTML → append_file (≤150 líneas).\n"
+            "• Añadir al principio → edit_file del bloque inicial, no reescribir todo.\n"
+            "NO crees index.html nuevo ni una web de nutrias.\n"
             + (f"MISIÓN ORIGINAL:\n{orig}\n" if orig else "")
-            + f"ARCHIVOS EN DISCO:\n{inv}"
+            + f"ARCHIVOS EN DISCO:\n{inv}\n"
+            + ("\n".join(tails) if tails else "")
         )
     if getattr(run, "memory_block", ""):
         parts.append(

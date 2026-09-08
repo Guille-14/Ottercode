@@ -570,6 +570,19 @@ def _run_native_tool(run: Any, agent_id: str, iteration: int, executor: Any, cal
         return {"ok": False, "output": "sin herramienta"}
 
     args = alias_args(name, args)
+    if name == "write_file":
+        fp = str(args.get("filepath") or args.get("path") or "").strip()
+        try:
+            cand = (run.workdir / fp) if fp else None
+            if cand is not None and cand.is_file() and cand.stat().st_size > 80:
+                msg = (
+                    f"ACCESO DENEGADO: «{fp}» ya existe. Usa edit_file o append_file; "
+                    "write_file lo regeneraría desde cero."
+                )
+                yield {"kind": "result", "name": name, "ok": False, "output": msg}
+                return {"ok": False, "output": msg}
+        except OSError:
+            pass
     if _needs_permission(run, name, args):
         perm_id = str(uuid.uuid4())
         PENDING_PERMISSIONS[perm_id] = threading.Event()
@@ -817,9 +830,19 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                         run._files_ever_written = True
                         # v5.1 · el contenido salvado SIEMPRE está cortado
                         # (num_predict mató el JSON): hay que completarlo.
-                        run._turn_salvaged_truncated = True
                         run._last_salvaged_file = s_nombre
-                        break   # turno terminado con el archivo a salvo
+                        try:
+                            _tail = (run.workdir / s_nombre).read_text(encoding="utf-8")[-900:]
+                        except OSError:
+                            _tail = ""
+                        run.messages.append({"role": "user", "content": (
+                            f"OK: {s_nombre} está en disco PERO incompleto. "
+                            "PROHIBIDO write_file (machaca lo escrito). "
+                            f"Siguiente skill: append_file filepath=\"{s_nombre}\" "
+                            "con SOLO lo que falta (≤150 líneas). Cola actual:\n"
+                            f"{_tail}"
+                        )})
+                        continue
                 fb = _invalid_json_feedback(parse_text)
                 yield sse(SseEvent.system, {
                     "text": ("⚠️ JSON cortado por longitud: pidiendo escritura POR PARTES."
@@ -1511,6 +1534,7 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
             # desconocido) → un turno correctivo que obliga a escribir archivos
             # de verdad con write_file/append_file.
             if (_rescue_needed_chat
+                    and not getattr(run, "continue_task", "")
                     and not (getattr(run, "_turn_tools", set()) & _WRITE_TOOLS)
                     and not getattr(run, "_files_ever_written", False)):
                 yield sse(SseEvent.system, {
@@ -1919,5 +1943,25 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
         try:
             save_session(run)       # JSON legacy
             save_session_to_db(run) # FASE 2 · SQLite + FTS5
+        except Exception as _e:  # noqa: BLE001
+            print(f"[WARN] Persistencia fallida para {run.task_id}: {_e}", flush=True)
+_name__,
+            "detail": detail,
+            "step": getattr(run, "_current_step", "") or "",
+            "task_id": run.task_id,
+        })
+        _activity_finish("error")
+    finally:
+        run.meta["approved"] = run.approved
+        run.meta["iterations"] = run.iterations
+        run.meta["files"] = run.executor.list_workspace()
+        run.meta["injected_agents"] = run.injected_agents
+        run.meta["duration_s"] = round(time.time() - started, 1)
+        try:
+            save_session(run)       # JSON legacy
+            save_session_to_db(run) # FASE 2 · SQLite + FTS5
+        except Exception as _e:  # noqa: BLE001
+            print(f"[WARN] Persistencia fallida para {run.task_id}: {_e}", flush=True)
+2 · SQLite + FTS5
         except Exception as _e:  # noqa: BLE001
             print(f"[WARN] Persistencia fallida para {run.task_id}: {_e}", flush=True)
