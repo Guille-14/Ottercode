@@ -183,6 +183,8 @@ def _is_context_overflow(text: str) -> bool:
         "context length", "context window", "too many tokens",
         "n_keep", "exceeds context", "maximum context",
         "prompt is too long", "num_ctx",
+        "exceed_context", "available context", "n_prompt_tokens",
+        "n_ctx", "context size",
     ))
 
 
@@ -261,7 +263,7 @@ def stream_llm(
         except Exception:
             pass
         # v6.0 · el transporte puede conmutarse a mitad de misión (fallback)
-        url, payload = _llm_request(run, system_prompt, prompt)
+        url, payload = _llm_request(run, system_prompt, prompt, agent_id=agent_id)
         _is_chat = "/api/chat" in url
         collected: List[str] = []
         stats: Dict[str, Any] = {}
@@ -402,7 +404,7 @@ def stream_llm(
             time.sleep(wait)
 
 
-def _llm_request(run: Any, system_prompt: str, prompt: str) -> Tuple[str, Dict[str, Any]]:
+def _llm_request(run: Any, system_prompt: str, prompt: str, agent_id: str = "") -> Tuple[str, Dict[str, Any]]:
     """(url, payload) según el transporte configurado.
 
     v6.0 · Fase 1: transporte primario /api/chat con messages[] por roles
@@ -451,7 +453,10 @@ def _llm_request(run: Any, system_prompt: str, prompt: str) -> Tuple[str, Dict[s
     else:
         _messages.append({"role": "user", "content": prompt})
     # FASE 5 · Native Function Calling: enviar tools solo si el modelo es capaz
-    _tools = tools.get_ollama_tools() if any(m in run.model for m in TOOL_CAPABLE_MODELS) else None
+    # El Revisor no necesita el catálogo entero de tools (~20k tok) y
+    # dispara overflow al auditar. El código está en disco.
+    _want_tools = any(m in run.model for m in TOOL_CAPABLE_MODELS) and agent_id != "reviewer"
+    _tools = tools.get_ollama_tools() if _want_tools else None
     
     return (
         f"{OLLAMA_BASE_URL}/api/chat",

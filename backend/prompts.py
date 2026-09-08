@@ -368,22 +368,33 @@ def build_developer_prompt(
 
 
 def build_reviewer_prompt(run: "OtterRun", plan: str) -> str:
-    files_text = run.executor.read_workspace_for_review(
-        REVIEWER_PER_FILE_LIMIT, REVIEWER_TOTAL_LIMIT
-    )
+    """No volcar el workspace entero: eso llena n_ctx (48k vs 18k)."""
+    inventory: List[str] = []
+    try:
+        for f in run.executor.list_workspace()[:24]:
+            p = f.get("path") if isinstance(f, dict) else str(f)
+            sz = f.get("size") if isinstance(f, dict) else 0
+            if not p or str(p).startswith("."):
+                continue
+            inventory.append(f"- {p} ({sz} B)")
+    except Exception:
+        pass
     parts = [
         "# AUDITORÍA — BALSA OTTERCODE",
-        f"[MISIÓN DEL USUARIO]\n{run.task_text}",
+        f"[MISIÓN DEL USUARIO]\n{(run.task_text or '')[:800]}",
     ]
     if getattr(run, "goal", ""):
         parts.append(_goal_block(run.goal))
     if plan:
-        parts.append(f"[PLAN DEL ARQUITECTO]\n{plan}")
-    parts.append(f"[CÓDIGO ACTUAL EN EL WORKSPACE]\n{files_text or '(workspace vacío: no se escribió nada)'}")
+        parts.append(f"[PLAN DEL ARQUITECTO]\n{plan[:1500]}")
     parts.append(
-        "Instrucciones: inspecciona el código (read_file/tree) y ejecuta tests "
-        "razonables con execute_bash (p. ej. python3 -m py_compile X.py, "
-        "node --check X.js). Después dictamina según tu REGRA DE HIERRO."
+        "[ARCHIVOS EN DISCO — lee con read_file lo que necesites; "
+        "NO se pega el código completo aquí]\n"
+        + ("\n".join(inventory) if inventory else "(vacío)")
+    )
+    parts.append(
+        "Inspecciona con tree/read_file (trozos). Dictamina breve. "
+        "No copies archivos enteros en tu respuesta."
     )
     return "\n\n".join(parts)
 

@@ -99,8 +99,7 @@ def _active_num_ctx(run: Any) -> int:
 
 def _compact_threshold(run: Any) -> int:
     num_ctx = _active_num_ctx(run)
-    reserved = min(_reserved_output_tokens(run), num_ctx // 2)
-    return max(512, num_ctx - reserved)
+    return max(512, int(num_ctx * 0.55))
 
 
 def _call_token_estimate(run: Any, system_prompt: str, prompt: str = "") -> int:
@@ -705,23 +704,24 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         try:
             last_text, _stats = yield from stream_llm(run, agent_id, system_prompt, prompt)  # type: ignore[misc]
         except ContextOverflow:
-            if getattr(run, "_overflow_retried", False):
-                yield sse(SseEvent.system, {
-                    "text": "❌ Desbordamiento de contexto tras un reintento. Intervención humana."
-                })
-                raise RuntimeError("contexto desbordado tras compactar y reintentar una vez")
-            run._overflow_retried = True
+            n_ov = int(getattr(run, "_overflow_n", 0) or 0) + 1
+            run._overflow_n = n_ov
             yield sse(SseEvent.system, {
-                "text": "⚠️ Ollama: contexto lleno. Compactando y reintentando este paso UNA vez…"
+                "text": f"⚠️ Contexto GPU lleno ({n_ov}/3). Checkpoint: resumen + archivos en disco…"
             })
-            _maybe_compact_messages(run, agent_id, system_prompt, prompt=prompt, force=True)
+            _hard_trim_messages(run)
+            prompt = (prompt or "")[:2500]
+            if n_ov >= 3:
+                yield sse(SseEvent.system, {
+                    "text": "🗜️ Contexto al límite tras 3 recortes. Sigue en este chat; "
+                            "el código está en el workspace. Pulsa Compactar ahora si hace falta."
+                })
+                last_text, _stats = "", {}
+                break
             try:
                 last_text, _stats = yield from stream_llm(run, agent_id, system_prompt, prompt)  # type: ignore[misc]
             except ContextOverflow:
-                yield sse(SseEvent.system, {
-                    "text": "❌ El contexto volvió a desbordar tras compactar. No se reintenta más."
-                })
-                raise RuntimeError("contexto desbordado tras compactar y reintentar una vez")
+                continue
         except AbortRequested:
             # v4.4 · aborto en plena generación: lo generado se conserva
             if getattr(run, "_partial_text", ""):
@@ -1032,6 +1032,11 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
              "args": args, "ok": result["ok"], "output": result["output"]}
         )
         run._turn_tools.add(tool_name)
+        run.messages.append(
+            {"role": "user", "content": format_tool_result(tool_name, result)})
+    else:
+        yield sse(SseEvent.system, {
+            "text": f"⚠️ Límite de skills por turno alcanzado ({max_steps}); el turno termina."
         run.messages.append(
             {"role": "user", "content": format_tool_result(tool_name, result)})
     else:
@@ -1918,4 +1923,3 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
             save_session_to_db(run) # FASE 2 · SQLite + FTS5
         except Exception as _e:  # noqa: BLE001
             print(f"[WARN] Persistencia fallida para {run.task_id}: {_e}", flush=True)
-encia fallida para {run.task_id}: {_e}", flush=True)
