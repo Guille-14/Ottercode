@@ -84,9 +84,9 @@ def _append_session_event(session_id: Optional[str], event: Dict[str, Any]) -> N
 # listar los prefijos/familias modernas.
 TOOL_CAPABLE_MODELS = {
     "llama3.1", "llama3.2", "llama3.3",
-    "qwen2.5", "qwen3", "qwen3.8",
+    "qwen2.5-coder", "qwen3-coder", "qwen2.5", "qwen3", "qwen3.8",
     "gemma2", "gemma3", "gemma4",
-    "mistral", "mistral-nemo", "mixtral",
+    "mistral", "mistral-nemo", "mixtral", "devstral",
     "phi4", "sqlcoder",
 }
 

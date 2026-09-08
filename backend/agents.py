@@ -182,10 +182,21 @@ ULTRAREVIEW_SUFFIX = (
 )
 
 
-def tool_protocol(tool_names: List[str]) -> str:
+def tool_protocol(tool_names: List[str], native: bool = False) -> str:
     """Bloque de instrucción de skills inyectado según el agente."""
     if not tool_names:
         return ""
+    if native:
+        names = ", ".join(tool_names)
+        return (
+            "\n=== TOOLS (function calling nativo) ===\n"
+            "Usa function calling; no emitas JSON de tools en el texto.\n"
+            f"Tools: {names}, finalizar.\n"
+            "1) LEE (read_file/list_dir) antes de editar.\n"
+            "2) edit_file o apply_patch para cambios; write_file SOLO archivos nuevos cortos.\n"
+            "3) Tras editar, execute_bash para tests/compile.\n"
+            "4) Una tool por paso. Prohibido dump de HTML/código en el chat.\n"
+        )
     lines = [
         "",
         "=== SISTEMA DE SKILLS (OtterCode, estilo Claude Code) ===",

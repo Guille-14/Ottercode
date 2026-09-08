@@ -1,9 +1,10 @@
 # OtterCode — transporte LLM: sesiones, VRAM flush, streaming, errores
 from __future__ import annotations
 from backend.config import *  # noqa: F401,F403
+import tools  # noqa: E402
 from backend.runstate import OtterRun  # noqa: E402
 from backend.history import TOOL_CAPABLE_MODELS  # noqa: E402
-from backend.config import FLUSH_WAIT_SECONDS, GENERATE_TIMEOUT, LLM_BACKEND, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, _ollama_httpx, _ollama_session  # noqa: E402
+from backend.config import FLUSH_WAIT_SECONDS, GENERATE_TIMEOUT, KEEP_ALIVE_DEFAULT, LLM_BACKEND, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, _ollama_httpx, _ollama_session, native_tools_enabled  # noqa: E402
 from backend.agents import _chat_base  # noqa: E402
 from backend.runstate import AbortRequested  # noqa: E402  (abortos en stream_llm)
 import backend.settings as _otter_settings  # noqa: E402
@@ -413,26 +414,29 @@ def _llm_request(run: Any, system_prompt: str, prompt: str, agent_id: str = "") 
     Envía SIEMPRE options (num_ctx/num_predict) y keep_alive.
     """
     num_ctx = getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT
-    keep = os.environ.get("OTTERCODE_KEEP_ALIVE", "15m")
+    keep = os.environ.get("OTTERCODE_KEEP_ALIVE", KEEP_ALIVE_DEFAULT)
     transport = getattr(run, "_transport", "chat")
     # FASE 3 · resolver temperature/top_p del run (viene del perfil)
     _temp = getattr(run, "temperature", None) or 0.7
     _top = getattr(run, "top_p", None) or 0.9
+    _want_tools = native_tools_enabled(getattr(run, "model", "") or "") and agent_id != "reviewer"
+    _allowed = getattr(run, "_native_allowed", None)
+    _tools = tools.get_ollama_tools(_allowed) if _want_tools else None
     if LLM_BACKEND == "openai" or transport == "openai":
-        return (
-            f"{_chat_base()}/chat/completions",
-            {
-                "model": run.model,
-                "stream": True,
-                "max_tokens": NUM_PREDICT_DEFAULT,
-                "temperature": _temp,
-                "top_p": _top,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-            },
-        )
+        oa = {
+            "model": run.model,
+            "stream": True,
+            "max_tokens": NUM_PREDICT_DEFAULT,
+            "temperature": _temp,
+            "top_p": _top,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        if _tools:
+            oa["tools"] = _tools
+        return (f"{_chat_base()}/chat/completions", oa)
     if transport == "generate":
         _prompt = _flatten_messages(getattr(run, "messages", None)) or prompt
         return (

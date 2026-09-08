@@ -2015,41 +2015,144 @@ if __name__ == "__main__":  # sanity check manual
         print(ro.dispatch("write_file", {"filepath": "x.txt", "content": "x"}))
         print(ro.dispatch("python_exec", {"code": "print(1)"}))
 
+def _prop(typ: str, desc: str = "", **extra: Any) -> Dict[str, Any]:
+    d: Dict[str, Any] = {"type": typ}
+    if desc:
+        d["description"] = desc
+    d.update(extra)
+    return d
+
+
 _TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
-    "read_file": {"filepath": "string", "offset": "integer", "limit": "integer"},
-    "write_file": {"filepath": "string", "content": "string"},
-    "append_file": {"filepath": "string", "content": "string"},
-    "edit_file": {"filepath": "string", "old_string": "string", "new_string": "string"},
-    "mkdir": {"path": "string"},
-    "list_dir": {"path": "string"},
-    "tree": {"path": "string", "max_depth": "integer"},
-    "execute_bash": {"cmd": "string"},
-    "python_exec": {"code": "string"},
-    "web_search": {"query": "string"},
-    "web_fetch": {"url": "string"},
-    "grep_search": {"pattern": "string", "path": "string"},
-    "glob_files": {"pattern": "string"},
-    "http_request": {"url": "string", "method": "string", "body": "string"},
-    "semantic_search": {"query": "string", "top_k": "integer"},
-    "todo_write": {"todos": "array"},
-    "git_diff": {"staged": "boolean"},
-    "git_log": {"max": "integer"},
+    "read_file": {
+        "properties": {
+            "filepath": _prop("string", "Ruta relativa"),
+            "offset": _prop("integer", "Primera línea (1-based)"),
+            "limit": _prop("integer", "Máximo de líneas"),
+        },
+        "required": ["filepath"],
+    },
+    "write_file": {
+        "properties": {
+            "filepath": _prop("string"),
+            "content": _prop("string", "Contenido completo (solo archivos NUEVOS cortos)"),
+        },
+        "required": ["filepath", "content"],
+    },
+    "append_file": {
+        "properties": {"filepath": _prop("string"), "content": _prop("string")},
+        "required": ["filepath", "content"],
+    },
+    "edit_file": {
+        "properties": {
+            "filepath": _prop("string"),
+            "old_string": _prop("string", "Texto exacto a reemplazar (único)"),
+            "new_string": _prop("string"),
+        },
+        "required": ["filepath", "old_string", "new_string"],
+    },
+    "apply_patch": {
+        "properties": {
+            "filepath": _prop("string"),
+            "patch": _prop("string", "Unified diff o bloques SEARCH/REPLACE"),
+        },
+        "required": ["filepath", "patch"],
+    },
+    "mkdir": {"properties": {"path": _prop("string")}, "required": ["path"]},
+    "list_dir": {"properties": {"path": _prop("string")}, "required": []},
+    "tree": {
+        "properties": {"path": _prop("string"), "max_depth": _prop("integer")},
+        "required": [],
+    },
+    "grep_search": {
+        "properties": {"pattern": _prop("string"), "path": _prop("string")},
+        "required": ["pattern"],
+    },
+    "glob_files": {
+        "properties": {"pattern": _prop("string")},
+        "required": ["pattern"],
+    },
+    "execute_bash": {
+        "properties": {"cmd": _prop("string", "Comando en el workdir")},
+        "required": ["cmd"],
+    },
+    "python_exec": {
+        "properties": {"code": _prop("string")},
+        "required": ["code"],
+    },
+    "git_status": {"properties": {}, "required": []},
+    "git_diff": {
+        "properties": {"staged": _prop("boolean")},
+        "required": [],
+    },
+    "git_log": {
+        "properties": {"max": _prop("integer")},
+        "required": [],
+    },
+    "git_commit": {
+        "properties": {
+            "message": _prop("string"),
+            "paths": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["message"],
+    },
+    "todo_write": {
+        "properties": {
+            "todos": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": "Lista {content, status, agent, evidence}",
+            },
+        },
+        "required": ["todos"],
+    },
+    "todo_read": {"properties": {}, "required": []},
+    "semantic_search": {
+        "properties": {"query": _prop("string"), "top_k": _prop("integer")},
+        "required": ["query"],
+    },
+    "index_workspace": {"properties": {}, "required": []},
+    "web_search": {
+        "properties": {"query": _prop("string")},
+        "required": ["query"],
+    },
+    "web_fetch": {
+        "properties": {"url": _prop("string")},
+        "required": ["url"],
+    },
+    "finalizar": {
+        "properties": {"resumen": _prop("string")},
+        "required": [],
+    },
 }
 
 
-def get_ollama_tools() -> List[Dict[str, Any]]:
-    """Esquema OpenAI/Ollama con propiedades reales (Hermes + native FC)."""
-    ollama_tools = []
-    for name, info in TOOLS.items():
-        props = {
-            k: {"type": t} for k, t in (_TOOL_SCHEMAS.get(name) or {}).items()
-        }
-        required = [k for k in props if k in ("filepath", "content", "cmd", "query", "url", "pattern", "code")]
+def get_ollama_tools(allowed: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Schemas OpenAI/Ollama. Si `allowed` se pasa, SOLO esas tools + finalizar."""
+    ollama_tools: List[Dict[str, Any]] = []
+    if allowed is None:
+        names = list(TOOLS.keys())
+    else:
+        names = []
+        seen = set()
+        for n in allowed:
+            n = resolve_name(str(n or "").strip())
+            if n and n not in seen:
+                seen.add(n)
+                names.append(n)
+        if "finalizar" not in seen:
+            names.append("finalizar")
+    for name in names:
+        info = TOOLS.get(name) or {}
+        schema = _TOOL_SCHEMAS.get(name) or {}
+        props = dict(schema.get("properties") or {})
+        required = list(schema.get("required") or [])
+        desc = info.get("desc") or name
         ollama_tools.append({
             "type": "function",
             "function": {
                 "name": name,
-                "description": info.get("desc", ""),
+                "description": desc,
                 "parameters": {
                     "type": "object",
                     "properties": props,
@@ -2057,4 +2160,14 @@ def get_ollama_tools() -> List[Dict[str, Any]]:
                 },
             },
         })
+    try:
+        if mcp_client.mcp_loop.is_ready():
+            mgr = mcp_client.get_manager()
+            extra = getattr(mgr, "openai_tools", None) or getattr(mgr, "list_openai_tools", None)
+            if callable(extra):
+                extra = extra()
+            if isinstance(extra, list):
+                ollama_tools.extend(extra)
+    except Exception:
+        pass
     return ollama_tools

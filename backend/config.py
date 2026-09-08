@@ -174,6 +174,21 @@ KEEP_ALIVE_DEFAULT = os.environ.get("OTTERCODE_KEEP_ALIVE", "15m")
 SANDBOX_REQUIRED = os.environ.get("OTTERCODE_SANDBOX_REQUIRED", "1").strip().lower() not in ("0", "false", "no")
 NATIVE_TOOLS_MODE = os.environ.get("OTTERCODE_NATIVE_TOOLS", "auto").strip().lower() or "auto"
 FLUSH_EVERY_TURN = os.environ.get("OTTERCODE_FLUSH_EVERY_TURN", "0").strip().lower() in ("1", "true", "yes")
+
+_NATIVE_AUTO_MARKERS = (
+    "qwen2.5-coder", "qwen3-coder", "qwen2.5", "qwen3",
+    "llama3.1", "llama3.3", "mistral", "devstral",
+)
+
+
+def native_tools_enabled(model: str) -> bool:
+    mode = (NATIVE_TOOLS_MODE or "auto").strip().lower()
+    if mode in ("on", "1", "true", "yes"):
+        return True
+    if mode in ("off", "0", "false", "no"):
+        return False
+    name = (model or "").lower()
+    return any(m in name for m in _NATIVE_AUTO_MARKERS)
 # Compactación automática: si el turno acumula más caracteres que esto, se
 # resume el trabajo previo y se libera el historial (estilo Claude Code).
 # 30k chars ≈ 8k tokens: prompt + generación conviven holgados en 16k ctx.

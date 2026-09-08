@@ -47,7 +47,7 @@ from backend.prompts import _looks_like_tool_attempt, _prev_conversation_block, 
 from backend.ollama import ContextOverflow, _estimate_tokens, _ollama_ndjson_text, flush_vram, stream_llm  # noqa: E402
 from backend.history import TOOL_CAPABLE_MODELS, save_session  # noqa: E402
 from backend.db import save_session_to_db  # noqa: E402
-from backend.config import HACKER_SUFFIX, LLM_BACKEND, MAX_INJECTIONS, MAX_TOOL_STEPS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL  # noqa: E402
+from backend.config import HACKER_SUFFIX, LLM_BACKEND, MAX_INJECTIONS, MAX_TOOL_STEPS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, native_tools_enabled  # noqa: E402
 from backend.agents import AGENT_ORDER, Agent, DYNAMIC_AGENTS, ULTRAREVIEW_SUFFIX, _CORE_BASE_PROMPTS, _agent_meta, _chat_base, get_agent, skill_enabled, tool_protocol  # noqa: E402
 from backend.agents import *  # noqa: F401,F403
 from backend.prompts import *  # noqa: F401,F403
@@ -569,6 +569,27 @@ def _run_native_tool(run: Any, agent_id: str, iteration: int, executor: Any, cal
         yield {"kind": "result", "name": name, "ok": False, "output": "sin herramienta"}
         return {"ok": False, "output": "sin herramienta"}
 
+    name = tools.resolve_name(name)
+    agent = get_agent(agent_id)
+    allowed = [t for t in agent.tools_disponibles if skill_enabled(t)]
+    extra = getattr(run, "_native_allowed", None)
+    if extra:
+        allowed = [t for t in allowed if t in extra]
+    if name != "finalizar" and name not in allowed:
+        msg = (
+            f"ACCESO DENEGADO: '{name}' no está en tu lista de skills. "
+            f"Disponibles: {', '.join(allowed + ['finalizar'])}."
+        )
+        if agent.readonly and name in _WRITE_TOOLS:
+            msg = (
+                f"ACCESO DENEGADO: eres SOLO-LECTURA y '{name}' escribe archivos."
+            )
+        yield {"kind": "result", "name": name, "ok": False, "output": msg}
+        return {"ok": False, "output": msg}
+    if not skill_enabled(name) and name != "finalizar":
+        msg = f"Skill '{name}' deshabilitada."
+        yield {"kind": "result", "name": name, "ok": False, "output": msg}
+        return {"ok": False, "output": msg}
     args = alias_args(name, args)
     if name == "write_file":
         fp = str(args.get("filepath") or args.get("path") or "").strip()
@@ -595,10 +616,18 @@ def _run_native_tool(run: Any, agent_id: str, iteration: int, executor: Any, cal
             msg = f"ACCESO DENEGADO: usuario denegó '{name}'"
             yield {"kind": "result", "name": name, "ok": False, "output": msg}
             return {"ok": False, "output": msg}
+    if name == "finalizar":
+        resumen = str(args.get("resumen", "") or "finalizado")
+        yield {"kind": "result", "name": name, "ok": True, "output": resumen}
+        return {"ok": True, "output": resumen}
+
     res = executor.dispatch(name, args)
-
-    yield {"kind": "result", "name": name, "ok": res.get("ok", False), "output": res.get("output", "")}
-
+    out = res.get("output", "")
+    try:
+        out = format_tool_result(name, res)
+    except Exception:
+        pass
+    yield {"kind": "result", "name": name, "ok": res.get("ok", False), "output": out}
     return res
 
 
@@ -619,6 +648,8 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
     # append_file en la completación: imposible volver a volcar en un write)
     if only_tools:
         allowed = [t for t in allowed if t in only_tools]
+    run._native_allowed = list(allowed)
+    _native_on = native_tools_enabled(run.model)
     # Regenera el protocolo de skills según los toggles activos (core agents)
     base = _CORE_BASE_PROMPTS.get(agent.id)
     # FASE 3 · Si el perfil activo tiene system_override, usarlo como base
@@ -627,7 +658,7 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         system_prompt = profile_override + "\n\n" + tool_protocol(allowed)
     else:
         system_prompt = (
-            base + tool_protocol(allowed) if base else agent.system_prompt
+            base + tool_protocol(allowed, native=_native_on) if base else agent.system_prompt
         )
     if run.hacker:
         system_prompt = system_prompt + HACKER_SUFFIX
@@ -746,7 +777,7 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         # v3.4 · el parsing y el historial usan el texto SIN bloques <think>
         parse_text = _strip_think(last_text)
         # FASE 5 · Native Function Calling
-        if any(m in run.model for m in TOOL_CAPABLE_MODELS):
+        if native_tools_enabled(run.model):
             _msg = _stats.get("message")
             native_calls = (_msg or {}).get("tool_calls", [])
             if native_calls:
@@ -774,7 +805,11 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                             if not isinstance(getattr(run, "_turn_tools", None), set):
                                 run._turn_tools = set()
                             run._turn_tools.add(event["name"])
+                            if event["name"] == "finalizar":
+                                run._native_done = True
                 # Native FC ya ejecutó las tools: no reparsear JSON/Hermes (doble dispatch).
+                if getattr(run, "_native_done", False):
+                    break
                 continue
 
         run.transcript.append(
