@@ -114,7 +114,7 @@ export default function ArtifactsPanel() {
         const list: FlatFile[] = flattenTree(r.tree).filter(
           (f) => {
             const base = f.path.split('/').pop()
-            return base !== '.otter_rag.db' && base !== '.otter_hooks.json'
+            return Boolean(base) && !F.isHiddenWorkspaceFile(f.path)
           },
         )
         setHooks((r as { hooks?: Record<string, { ok?: boolean; issues?: string[] }> }).hooks || {})

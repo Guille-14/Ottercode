@@ -56,7 +56,7 @@ function Explorer({ onOpen, selected }: { onOpen: (p: string) => void; selected:
       .then((r) => {
         const out: { path: string; size?: number }[] = []
         flatNodes(r.tree, [], out)
-        setFiles(out.filter(f => f.path.split('/').pop() !== '.otter_rag.db'))
+        setFiles(out.filter((f) => !F.isHiddenWorkspaceFile(f.path)))
       })
       .catch((e: unknown) => setErr((e as Error).message))
   }, [taskId])

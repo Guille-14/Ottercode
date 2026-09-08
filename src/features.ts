@@ -189,6 +189,20 @@ export function looksLikeHtmlDump(text: string): boolean {
   return tags >= 6 && /<(div|h[1-6]|p|section|html|body)\b/i.test(t)
 }
 
+const HIDDEN_BASE = new Set([
+  '.otter_rag.db',
+  '.otter_rag.indexed',
+  '.otter_hooks.json',
+  '.otter_todo.json',
+  '.otter_memory.json',
+  'ottercode_transcript.json',
+])
+
+export function isHiddenWorkspaceFile(path: string): boolean {
+  const base = path.split('/').pop() || path
+  return HIDDEN_BASE.has(base) || base.startsWith('.otter')
+}
+
 export function studioFile(taskId: string, path: string): void {
   useUi.getState().openStudio({ taskId, path })
 }
@@ -213,7 +227,7 @@ export function deriveLiveFiles(mission: MissionEvent[]): string[] {
       if (Array.isArray(files)) {
         for (const f of files) {
           const s = filePathOf(f)
-          if (s && !seen.has(s) && s !== '[object Object]') {
+          if (s && !seen.has(s) && s !== '[object Object]' && !isHiddenWorkspaceFile(s)) {
             seen.add(s)
             out.push(normPath(s))
           }
@@ -258,5 +272,6 @@ export const F = {
   deriveLiveFiles,
   filePathOf,
   looksLikeHtmlDump,
+  isHiddenWorkspaceFile,
   normPath,
 }

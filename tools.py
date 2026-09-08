@@ -1886,7 +1886,11 @@ class ToolExecutor:
                 size = path.stat().st_size
             except OSError:
                 continue
-            files.append({"path": str(path.relative_to(self.workdir)), "size": size})
+            rel = str(path.relative_to(self.workdir))
+            base = path.name
+            if base.startswith(".otter") or base == "ottercode_transcript.json":
+                continue
+            files.append({"path": rel, "size": size})
         return files
 
     def read_workspace_for_review(

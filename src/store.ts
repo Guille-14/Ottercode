@@ -167,7 +167,11 @@ export const useUi = create<UiState>()(
         startAgent: m === 'chain' ? 'architect' : (get().startAgent === 'architect' ? 'agent' : get().startAgent || 'agent'),
       }),
       setStartAgent: (id) => set({ startAgent: id }),
-      openStudio: (t) => set({ studio: t }),
+      openStudio: (t) => {
+        const path = typeof t.path === 'string' ? t.path.trim() : ''
+        if (!path || path === '[object Object]') return
+        set({ studio: { taskId: t.taskId, path } })
+      },
       closeStudio: () => set({ studio: null }),
       toggleFocus: () => set((s) => ({ focus: !s.focus })),
       setComposerDraft: (d) => set({ composerDraft: d }),

@@ -1142,8 +1142,19 @@ def _rescue_code_from_text(run: OtterRun, agent_id: str, text: str) -> Iterator[
     # el de MAYOR contenido (cerrado o abierto)
     lang, contenido, truncado = max(candidatos, key=lambda c: len(c[1]))
     low = contenido.lstrip().lower()
-    if lang == "html" or low.startswith("<!doctype") or low.startswith("<html"):
+    if lang == "html" or low.startswith("<!doctype") or low.startswith("<html") or "<div" in low:
         nombre = "index.html"
+        if not low.startswith("<!doctype") and not low.startswith("<html"):
+            contenido = (
+                "<!DOCTYPE html>\n<html lang=\"es\"><head>"
+                "<meta charset=\"utf-8\"/>"
+                "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>"
+                "<script src=\"https://cdn.tailwindcss.com\"></script>"
+                "<title>OtterCode</title></head><body>\n"
+                + contenido
+                + "\n</body></html>\n"
+            )
+            low = contenido.lstrip().lower()
     elif lang == "css":
         nombre = "styles.css"
     elif lang in ("js", "javascript"):
