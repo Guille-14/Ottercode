@@ -201,7 +201,7 @@ def _compact_context(run: Any, agent_id: str, entries: List[Tuple[str, str]]) ->
             json={
                 "model": run.model, "prompt": condensed,
                 "system": _COMPACT_SYSTEM, "stream": False,
-                "options": {"num_ctx": int(num_ctx), "num_predict": 512, "num_gpu": 99},
+                "options": {"num_ctx": min(int(num_ctx), 4096), "num_predict": 400, "num_gpu": 99},
             },
             timeout=(10, 120),
         )
@@ -209,6 +209,65 @@ def _compact_context(run: Any, agent_id: str, entries: List[Tuple[str, str]]) ->
         return _ollama_ndjson_text(resp.text)
     except Exception:  # noqa: BLE001 — la compactación jamás tumba un turno
         return None
+
+
+_MSG_CLIP = 2200
+
+
+def _workspace_snapshot(run: Any) -> str:
+    """Índice del disco: el proyecto vive en archivos, no en el KV de la GPU."""
+    lines: List[str] = []
+    try:
+        for f in run.executor.list_workspace():
+            if isinstance(f, dict):
+                p = str(f.get("path") or "")
+                sz = int(f.get("size") or 0)
+            else:
+                p, sz = str(f), 0
+            if not p or p.startswith(".") or p.endswith(".indexed"):
+                continue
+            lines.append(f"- {p} ({sz} B)")
+    except Exception:
+        pass
+    if not lines:
+        return "(workspace vacío — aún no hay archivos)"
+    return (
+        "ARCHIVOS EN DISCO (edítalos con write_file/append_file/edit_file; "
+        "NO los pegues enteros en el chat):\n" + "\n".join(lines[:48])
+    )
+
+
+def _clip_message(m: Dict[str, Any]) -> Dict[str, Any]:
+    c = str(m.get("content") or "")
+    if len(c) <= _MSG_CLIP:
+        return m
+    out = dict(m)
+    out["content"] = (
+        c[:700]
+        + f"\n… [{len(c)} caracteres omitidos; el código está en el workspace]\n"
+        + c[-350:]
+    )
+    return out
+
+
+def _hard_trim_messages(run: Any) -> None:
+    """Último recurso: deja resumen + 4 mensajes recientes. El repo sigue en disco."""
+    msgs = list(run.messages or [])
+    if not msgs:
+        return
+    head = msgs[:1]
+    tail = [_clip_message(m) for m in msgs[-4:]]
+    snap = _workspace_snapshot(run)
+    run.messages = head + [{
+        "role": "user",
+        "content": (
+            "[CHECKPOINT GPU — contexto reiniciado para no llenar VRAM]\n"
+            "El historial largo está en el JSONL de la misión. "
+            "Sigue el MISMO proyecto; no empieces de cero.\n"
+            f"{snap}"
+        ),
+    }] + tail
+    run._compact_blocked = False
 
 
 def _maybe_compact_messages(run: Any, agent_id: str, system_prompt: str,
@@ -226,8 +285,9 @@ def _maybe_compact_messages(run: Any, agent_id: str, system_prompt: str,
             return None
         if not force and not ev.get("over"):
             return None
-        msgs = list(run.messages or [])
+        msgs = [_clip_message(m) for m in (run.messages or [])]
         if len(msgs) < 3 and not force:
+            run.messages = msgs
             return None
         tail_n = max(2, min(_COMPACT_TAIL_N, len(msgs)))
         tail = msgs[-tail_n:]
@@ -235,20 +295,25 @@ def _maybe_compact_messages(run: Any, agent_id: str, system_prompt: str,
         _cond = [(m.get("content", ""), "") for m in old]
         _summ = _compact_context(run, agent_id, _cond) or "(historial antiguo truncado)"
         head = msgs[:1] if msgs else []
+        snap = _workspace_snapshot(run)
         run.messages = (
             head
             + [{"role": "user", "content": (
-                "[CHECKPOINT DE COMPACTACIÓN — resumen + cola reciente SIN resumir]\n"
-                f"{_summ}\n\n"
-                "El historial original sigue en el JSONL de la misión; este bloque "
-                "es lo que se envía al modelo."
+                "[CHECKPOINT DE COMPACTACIÓN — resumen + cola reciente]\n"
+                f"{_summ}\n\n{snap}\n\n"
+                "El historial original sigue en el JSONL; el código está en disco. "
+                "No regeneres archivos enteros: edita por partes."
             )}]
             + tail
         )
         after = _call_token_estimate(run, system_prompt, prompt)
         still_over = after > int(ev.get("thresh") or 0)
         if still_over:
-            run._compact_blocked = True
+            _hard_trim_messages(run)
+            after = _call_token_estimate(run, system_prompt, prompt)
+            still_over = after > int(ev.get("thresh") or 0)
+            if still_over:
+                run._compact_blocked = True
         try:
             append_checkpoint(
                 run, kind="compact", done="compactación de contexto (preflight)",
@@ -1009,12 +1074,16 @@ def _pending_todo_items(run: Any) -> List[Dict[str, Any]]:
 
 def compact_run_now(run: Any, agent_id: str = "agent") -> Dict[str, Any]:
     """T4: compactación manual (siempre disponible)."""
+    run._compact_blocked = False
     sys_p = ""
     try:
         sys_p = str((run.messages or [{}])[0].get("content") or "")
     except Exception:
         sys_p = ""
     summ = _maybe_compact_messages(run, agent_id, sys_p, force=True)
+    if not summ:
+        _hard_trim_messages(run)
+        summ = "(checkpoint GPU: historial recortado; archivos en disco)"
     ev = getattr(run, "_last_compact_eval", {}) or {}
     return {"ok": True, "summary": (summ or "")[:800], **ev}
 
@@ -1784,3 +1853,4 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
             save_session_to_db(run) # FASE 2 · SQLite + FTS5
         except Exception as _e:  # noqa: BLE001
             print(f"[WARN] Persistencia fallida para {run.task_id}: {_e}", flush=True)
+encia fallida para {run.task_id}: {_e}", flush=True)
