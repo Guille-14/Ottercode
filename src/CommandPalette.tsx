@@ -1,11 +1,11 @@
-// Paleta de comandos (Ctrl+K): comandos slash, vistas y sesiones recientes.
+// Paleta de comandos (Ctrl+K): comandos slash, vistas y acciones.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useUi } from './store'
 import { api } from './api'
 import { SLASH_COMMANDS } from './features'
 
-type Item = { kind: 'cmd' | 'view' | 'ses'; label: string; hint: string }
+type Item = { kind: 'cmd' | 'view' | 'ses' | 'act'; label: string; hint: string; run?: () => void }
 
 export default function CommandPalette({
   open,
@@ -23,6 +23,7 @@ export default function CommandPalette({
   const [skillCmds, setSkillCmds] = useState<{ cmd: string; desc: string }[]>([])
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const box = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (open) {
@@ -47,18 +48,79 @@ export default function CommandPalette({
     }
   }, [open])
 
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
   const items = useMemo<Item[]>(() => {
     const ql = q.toLowerCase()
     const out: Item[] = []
     const cmds = [...SLASH_COMMANDS, ...skillCmds]
+    const st = useUi.getState()
+    const goAjustes = (sec: string) => {
+      st.setSettingsSection(sec)
+      st.setView('ajustes')
+    }
+    const acts: Item[] = [
+      { kind: 'act', label: 'Nueva misión', hint: 'acción', run: () => { st.clearMission(); st.setView('misiones') } },
+      {
+        kind: 'act',
+        label: 'Compactar contexto',
+        hint: 'acción',
+        run: () => {
+          const id = st.taskId
+          if (!id) {
+            st.setNotice('No hay misión activa para compactar')
+            return
+          }
+          void api.compactNow(id).then((r) => {
+            st.setNotice(r.ok ? (r.still_over ? 'Compactado, el contexto sigue alto' : 'Contexto compactado') : 'No se pudo compactar')
+          }).catch((e: unknown) => st.setNotice((e as Error).message))
+        },
+      },
+      { kind: 'act', label: 'Abortar generación', hint: 'acción', run: () => st.stopMission(true) },
+      {
+        kind: 'act',
+        label: 'Deshacer cambios de la misión (git)',
+        hint: 'acción',
+        run: () => {
+          const id = st.taskId
+          if (!id) {
+            st.setNotice('No hay misión para deshacer')
+            return
+          }
+          void api.missionUndo(id).then(() => st.setNotice('Cambios de la misión deshechos')).catch((e: unknown) => st.setNotice((e as Error).message))
+        },
+      },
+      { kind: 'act', label: 'Ajustes · Parámetros', hint: 'ajustes', run: () => goAjustes('parametros') },
+      { kind: 'act', label: 'Ajustes · Modelos', hint: 'ajustes', run: () => goAjustes('modelos') },
+      { kind: 'act', label: 'Ajustes · Skills', hint: 'ajustes', run: () => goAjustes('skills') },
+      { kind: 'act', label: 'Ajustes · Memoria', hint: 'ajustes', run: () => goAjustes('memoria') },
+      { kind: 'act', label: 'Ajustes · Permisos', hint: 'ajustes', run: () => goAjustes('permisos') },
+      { kind: 'act', label: 'Ajustes · MCP', hint: 'ajustes', run: () => goAjustes('mcp') },
+      { kind: 'act', label: 'Ajustes · Telemetría', hint: 'ajustes', run: () => goAjustes('telemetria') },
+      { kind: 'act', label: 'Cambiar de bot (Agentes)', hint: 'acción', run: () => st.setView('identidad') },
+    ]
+    const match = (label: string, hint: string) => !ql || label.toLowerCase().includes(ql) || hint.toLowerCase().includes(ql)
     if (ql === '') {
-      for (const c of cmds.slice(0, 8))
+      for (const c of cmds.slice(0, 6))
         out.push({ kind: 'cmd', label: c.cmd, hint: c.desc })
+      for (const a of acts.slice(0, 8)) out.push(a)
       for (const v of nav) out.push({ kind: 'view', label: v.label, hint: 'vista' })
     } else {
       for (const c of cmds)
         if (c.cmd.includes(ql) || c.desc.toLowerCase().includes(ql))
           out.push({ kind: 'cmd', label: c.cmd, hint: c.desc })
+      for (const a of acts)
+        if (match(a.label, a.hint)) out.push(a)
       for (const v of nav)
         if (v.label.toLowerCase().includes(ql) || v.key.includes(ql))
           out.push({ kind: 'view', label: v.label, hint: 'vista' })
@@ -66,7 +128,7 @@ export default function CommandPalette({
         if (s.task.toLowerCase().includes(ql) || s.id.includes(ql))
           out.push({ kind: 'ses', label: s.task.slice(0, 48), hint: `${s.id} · sesión` })
     }
-    return out.slice(0, 10)
+    return out.slice(0, 14)
   }, [q, sessions, nav, skillCmds])
 
   if (!open) return null
@@ -78,6 +140,8 @@ export default function CommandPalette({
     } else if (it.kind === 'view') {
       const n = nav.find((v) => v.label === it.label)
       if (n) setView(n.key)
+    } else if (it.kind === 'act' && it.run) {
+      it.run()
     }
     onClose()
   }
@@ -86,10 +150,10 @@ export default function CommandPalette({
     if (e.key === 'Escape') onClose()
     else if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setSel((s) => (s + 1) % items.length)
+      setSel((s) => (s + 1) % Math.max(1, items.length))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setSel((s) => (s - 1 + items.length) % items.length)
+      setSel((s) => (s - 1 + items.length) % Math.max(1, items.length))
     } else if (e.key === 'Enter') {
       e.preventDefault()
       if (items[sel]) run(items[sel])
@@ -97,8 +161,12 @@ export default function CommandPalette({
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/30 pt-24" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/30 pt-24" onClick={onClose} role="presentation">
       <div
+        ref={box}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Paleta de comandos"
         className="w-full max-w-lg rounded-lg border border-line bg-panel p-2 shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >

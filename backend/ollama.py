@@ -90,10 +90,7 @@ def flush_all_vram() -> Dict[str, Any]:
         models = [DEFAULT_MODEL]  # fallback seguro
     ok = True
     errors: List[str] = []
-    from backend.router import ROUTER_MODEL, is_router_model
     for model in models:
-        if is_router_model(model) or model == ROUTER_MODEL:
-            continue
         try:
             resp = _ollama_session.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
@@ -176,6 +173,19 @@ def invalidate_models_cache() -> None:
 # Errores amigables + stream de Ollama
 # ---------------------------------------------------------------------------
 
+class ContextOverflow(RuntimeError):
+    """Ollama rechazó la llamada por ventana de contexto llena."""
+
+
+def _is_context_overflow(text: str) -> bool:
+    t = (text or "").lower()
+    return any(k in t for k in (
+        "context length", "context window", "too many tokens",
+        "n_keep", "exceeds context", "maximum context",
+        "prompt is too long", "num_ctx",
+    ))
+
+
 def _friendly_ollama_error(exc: Exception) -> str:
     msg = str(exc)
     name = type(exc).__name__
@@ -198,6 +208,36 @@ def _with_model_hint(detail: str, model: str) -> str:
     return detail
 
 
+def ensure_gpu_exclusive(keep_model: str) -> None:
+    """Deja SOLO `keep_model` en VRAM. El resto (router, residuos) a keep_alive 0.
+
+    Dos modelos a la vez en 8 GB empujan capas a CPU/RAM. El usuario pide GPU
+    siempre: un ocupante, todas las capas en GPU (num_gpu=99 en options).
+    """
+    if LLM_BACKEND != "ollama" or not keep_model:
+        return
+    try:
+        ps = _ollama_httpx.get("/api/ps", timeout=5).json()
+        loaded = [
+            str(m.get("name", "")).strip()
+            for m in (ps.get("models") or [])
+            if isinstance(m, dict) and m.get("name")
+        ]
+    except Exception:
+        return
+    for name in loaded:
+        if not name or name == keep_model:
+            continue
+        try:
+            _ollama_session.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={"model": name, "keep_alive": 0, "prompt": "", "stream": False},
+                timeout=30,
+            )
+        except requests.RequestException:
+            pass
+
+
 def stream_llm(
     run: Any, agent_id: str, system_prompt: str, prompt: str
 ) -> Iterator[str]:
@@ -216,6 +256,10 @@ def stream_llm(
     attempt = 0
     while True:
         attempt += 1
+        try:
+            ensure_gpu_exclusive(getattr(run, "model", "") or "")
+        except Exception:
+            pass
         # v6.0 · el transporte puede conmutarse a mitad de misión (fallback)
         url, payload = _llm_request(run, system_prompt, prompt)
         _is_chat = "/api/chat" in url
@@ -245,6 +289,8 @@ def stream_llm(
                                     "cambiando a /api/generate (compatibilidad)."
                         })
                         continue
+                    if _is_context_overflow(_detail):
+                        raise ContextOverflow(_detail)
                     raise RuntimeError(
                         _with_model_hint(
                             f"El modelo devolvió HTTP {resp.status_code}: {_detail}",
@@ -289,7 +335,10 @@ def stream_llm(
                     except json.JSONDecodeError:
                         continue
                     if data.get("error"):
-                        raise RuntimeError(_with_model_hint(f"Ollama: {data['error']}", run.model))
+                        err = str(data["error"])
+                        if _is_context_overflow(err):
+                            raise ContextOverflow(err)
+                        raise RuntimeError(_with_model_hint(f"Ollama: {err}", run.model))
                     if data.get("done"):
                         stats = {
                             "tokens": data.get("eval_count"),

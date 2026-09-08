@@ -48,16 +48,16 @@ function getFileIcon(path: string) {
   switch (ext) {
     case 'html':
     case 'htm':
-      return <Globe className="h-4 w-4 text-emerald-400" />
+      return <Globe className="h-4 w-4 text-accent" />
     case 'css':
-      return <Palette className="h-4 w-4 text-pink-400" />
+      return <Palette className="h-4 w-4 text-muted" />
     case 'js':
     case 'ts':
     case 'jsx':
     case 'tsx':
-      return <FileCode className="h-4 w-4 text-amber-400" />
+      return <FileCode className="h-4 w-4 text-ink2" />
     default:
-      return <FileText className="h-4 w-4 text-sky-400" />
+      return <FileText className="h-4 w-4 text-muted" />
   }
 }
 
@@ -245,7 +245,7 @@ export default function ArtifactsPanel() {
     : 'flex flex-1 min-w-0 h-full flex-col border-l border-line bg-canvas'
 
   return (
-    <aside className={asideClass}>
+    <aside className={asideClass} aria-label="Artefactos">
       {/* Cabecera Principal */}
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-panel px-4">
         <div className="flex items-center gap-2">
@@ -267,6 +267,7 @@ export default function ArtifactsPanel() {
           )}
           <button
             type="button"
+            aria-label={maximized ? 'Restaurar panel' : 'Maximizar panel'}
             onClick={() => setMaximized(!maximized)}
             title={maximized ? 'Restaurar' : 'Maximizar'}
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink"
@@ -275,6 +276,7 @@ export default function ArtifactsPanel() {
           </button>
           <button
             type="button"
+            aria-label="Cerrar artefactos"
             onClick={() => setArtifactsOpen(false)}
             title="Cerrar vista partida"
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink"
@@ -396,7 +398,7 @@ export default function ArtifactsPanel() {
           </div>
         ) : activeTab === 'preview' && previewHtml ? (
           <iframe
-            className="h-full w-full rounded-xl border border-line bg-white shadow-sm"
+            className="h-full w-full rounded-xl border border-line bg-canvas shadow-sm"
             style={{ width: '100%', height: '100%', border: 'none' }}
             sandbox="allow-scripts allow-forms allow-popups"
             title="preview artefacto"

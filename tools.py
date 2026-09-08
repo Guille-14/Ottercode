@@ -1317,23 +1317,59 @@ class ToolExecutor:
     # ----------------------------- plan de misión ----------------------------
 
     def todo_write(self, todos: Any) -> str:
-        """Persiste el plan de la misión (lista de pasos con estado y agente)."""
+        """Persiste el plan de la misión. Completado exige evidencia (test/archivo)."""
         self._check_writable("todo_write")
         items = todos if isinstance(todos, list) else []
+        prev: List[Dict[str, Any]] = []
+        p = self.workdir / TODO_FILE
+        if p.exists():
+            try:
+                prev = json.loads(p.read_text(encoding="utf-8")) or []
+            except (json.JSONDecodeError, OSError):
+                prev = []
+        prev_by = {str(it.get("content", "")): it for it in prev if isinstance(it, dict)}
         clean = []
+        rejected = []
         for it in items[:50]:
             if isinstance(it, dict):
+                content = str(it.get("content", ""))[:300]
+                status = str(it.get("status", "pending")).lower().strip()
+                if status in ("done", "complete", "completed", "completado", "x"):
+                    status = "completed"
+                elif status in ("in_progress", "doing", "en_curso", "en curso", "~"):
+                    status = "in_progress"
+                else:
+                    status = "pending"
+                evidence = str(it.get("evidence") or it.get("verificacion") or "").strip()
+                if status == "completed" and len(evidence) < 8:
+                    old = prev_by.get(content) or {}
+                    if str(old.get("status")) == "completed" and old.get("evidence"):
+                        evidence = str(old.get("evidence"))
+                    else:
+                        rejected.append(content or "?")
+                        status = "in_progress"
+                        evidence = ""
                 clean.append({
-                    "content": str(it.get("content", ""))[:300],
-                    "status": str(it.get("status", "pending")),
+                    "content": content,
+                    "status": status,
                     "agent": str(it.get("agent", "")),
+                    "evidence": evidence[:500],
                 })
             elif isinstance(it, str) and it.strip():
-                clean.append({"content": it.strip()[:300], "status": "pending", "agent": ""})
-        (self.workdir / TODO_FILE).write_text(
-            json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        return f"OK: plan guardado con {len(clean)} paso(s)."
+                clean.append({"content": it.strip()[:300], "status": "pending", "agent": "", "evidence": ""})
+        p.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            from backend.runstate import append_checkpoint
+            dummy = type("R", (), {"task_id": self.workdir.name, "start_agent": "", "files_report": []})()
+            append_checkpoint(dummy, kind="todo", done=f"{len(clean)} ítems",
+                              extra={"todos": clean})
+        except Exception:
+            pass
+        msg = f"OK: plan guardado con {len(clean)} paso(s)."
+        if rejected:
+            msg += (" Completado RECHAZADO (sin evidencia de test/archivo): "
+                    + ", ".join(rejected[:5]))
+        return msg
 
     def todo_read(self) -> str:
         p = self.workdir / TODO_FILE

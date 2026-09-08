@@ -5,9 +5,9 @@ import type { ReactNode } from 'react'
 function Row({ children, tone }: { children: ReactNode; tone: 'add' | 'del' | 'hunk' | 'ctx' }) {
   const cls =
     tone === 'add'
-      ? 'bg-emerald-500/10 text-emerald-400'
+      ? 'bg-accent/10 text-accent'
       : tone === 'del'
-        ? 'bg-rose-500/10 text-rose-400'
+        ? 'bg-panel2 text-muted'
         : tone === 'hunk'
           ? 'bg-panel text-muted'
           : 'text-ink/80'

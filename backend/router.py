@@ -78,8 +78,8 @@ def route(mensaje: str) -> Dict[str, str]:
                 "prompt": prompt,
                 "system": _CLASSIFY,
                 "stream": False,
-                "keep_alive": -1,
-                "options": {"num_ctx": 512, "num_predict": 64, "temperature": 0},
+                "keep_alive": "30s",
+                "options": {"num_ctx": 512, "num_predict": 64, "temperature": 0, "num_gpu": 99},
             },
             timeout=(3, 20),
         )
@@ -113,12 +113,12 @@ def preload_router() -> None:
                     "model": ROUTER_MODEL,
                     "prompt": "ok",
                     "stream": False,
-                    "keep_alive": -1,
-                    "options": {"num_ctx": 256, "num_predict": 1},
+                    "keep_alive": "30s",
+                    "options": {"num_ctx": 256, "num_predict": 1, "num_gpu": 99},
                 },
                 timeout=(5, 60),
             )
-            print(f"[ottercode] router {ROUTER_MODEL} keep_alive=-1", flush=True)
+            print(f"[ottercode] router {ROUTER_MODEL} keep_alive=30s", flush=True)
         except Exception as exc:
             print(f"[ottercode] router no precargado: {exc}", flush=True)
 
@@ -137,8 +137,8 @@ def direct_reply(mensaje: str) -> str:
                 "prompt": (mensaje or "")[:400],
                 "system": "Eres OtterCode. Responde en español, 1-3 frases, sin código.",
                 "stream": False,
-                "keep_alive": -1,
-                "options": {"num_ctx": 512, "num_predict": 120, "temperature": 0.4},
+                "keep_alive": "30s",
+                "options": {"num_ctx": 512, "num_predict": 120, "temperature": 0.4, "num_gpu": 99},
             },
             timeout=(5, 30),
         )

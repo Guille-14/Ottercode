@@ -104,7 +104,7 @@ export default function HwMonitor({
             className={`h-3 w-3 text-muted transition-transform ${min ? 'rotate-180' : ''}`}
           />
         </button>
-        <button type="button" onClick={onClose} className="rounded p-0.5 text-muted hover:text-ink" title="Ocultar monitor">
+        <button type="button" aria-label="Ocultar monitor" onClick={onClose} className="rounded p-0.5 text-muted hover:text-ink" title="Ocultar monitor">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>

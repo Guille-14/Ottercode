@@ -31,16 +31,16 @@ function getFileIcon(path: string) {
   switch (ext) {
     case 'html':
     case 'htm':
-      return <Globe className="h-4 w-4 text-emerald-400" />
+      return <Globe className="h-4 w-4 text-accent" />
     case 'css':
-      return <Palette className="h-4 w-4 text-pink-400" />
+      return <Palette className="h-4 w-4 text-muted" />
     case 'js':
     case 'ts':
     case 'jsx':
     case 'tsx':
-      return <FileCode className="h-4 w-4 text-amber-400" />
+      return <FileCode className="h-4 w-4 text-ink2" />
     default:
-      return <FileText className="h-4 w-4 text-sky-400" />
+      return <FileText className="h-4 w-4 text-muted" />
   }
 }
 
@@ -196,7 +196,7 @@ export default function Studio() {
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="rounded-md bg-accent/15 px-2 py-0.5 text-xs font-semibold text-accent">
-              STUDIO WORKSPACE
+              Studio
             </span>
             <p className="oc-mono truncate text-sm font-semibold text-ink">{openPath || 'sin archivo'}</p>
           </div>
@@ -233,7 +233,7 @@ export default function Studio() {
               <div className="flex flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
                 <header className="flex h-10 shrink-0 items-center justify-between border-b border-line bg-panel px-4">
                   <div className="flex items-center gap-1.5">
-                    <Globe className="h-4 w-4 text-emerald-400" />
+                    <Globe className="h-4 w-4 text-accent" />
                     <span className="text-xs font-semibold text-muted">Previsualización web</span>
                   </div>
                   <a
@@ -248,7 +248,7 @@ export default function Studio() {
                 </header>
                 <div className="flex-1 p-4 bg-canvas/30">
                   <iframe
-                    className="h-full w-full rounded-xl border border-line bg-white shadow-sm"
+                    className="h-full w-full rounded-xl border border-line bg-canvas shadow-sm"
                     sandbox="allow-scripts allow-forms allow-popups"
                     title="preview"
                     srcDoc={hard}

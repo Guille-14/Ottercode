@@ -54,7 +54,7 @@ function SkillsPane() {
                 aria-label={`${s.name}: ${s.enabled ? 'desactivar' : 'activar'}`}
               >
                 <span
-                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${
+                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-canvas transition-all ${
                     s.enabled ? 'left-[22px]' : 'left-0.5'
                   }`}
                 />
@@ -227,18 +227,30 @@ function McpPane() {
   )
 }
 
-export default function Configuracion() {
+export default function Configuracion({ pane = 'all' }: { pane?: 'all' | 'permisos' | 'mcp' }) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 px-4 py-6">
       <div>
-        <h2 className="text-lg font-semibold">Configuración</h2>
-        <p className="text-sm text-muted">skills, perfiles, carpeta y MCP</p>
+        <h2 className="text-lg font-semibold">
+          {pane === 'mcp' ? 'MCP' : pane === 'permisos' ? 'Permisos y proyecto' : 'Configuración'}
+        </h2>
+        <p className="text-sm text-muted">
+          {pane === 'mcp'
+            ? 'Servidores MCP conectados'
+            : pane === 'permisos'
+              ? 'Perfiles, carpeta de trabajo y skills de sistema'
+              : 'skills, perfiles, carpeta y MCP'}
+        </p>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <SkillsPane />
-        <ProfilesPane />
-        <ProjectPane />
-        <McpPane />
+        {(pane === 'all' || pane === 'permisos') && (
+          <>
+            {pane === 'all' && <SkillsPane />}
+            <ProfilesPane />
+            <ProjectPane />
+          </>
+        )}
+        {(pane === 'all' || pane === 'mcp') && <McpPane />}
       </div>
     </div>
   )

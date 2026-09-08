@@ -114,7 +114,11 @@ def build_options(run: Any) -> Dict[str, Any]:
     de run/perfil para temperature/top_p/num_ctx (precedencia mayor)."""
     s = load_runtime_settings()
     num_ctx = getattr(run, "num_ctx", None) or s.get("num_ctx") or NUM_CTX_DEFAULT
+    # SIEMPRE GPU: 99 capas = todas las que tenga el modelo. 0 = CPU y
+    # no se permite (es lo que tiraba tok/s a ~10 con offload a RAM).
     opts: Dict[str, Any] = {
+        "num_gpu": 99,
+        "main_gpu": 0,
         "num_ctx": int(num_ctx),
         "num_predict": int(s.get("num_predict", NUM_PREDICT_DEFAULT)),
         "temperature": _solo_range(

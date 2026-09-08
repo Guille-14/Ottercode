@@ -128,7 +128,7 @@ def harvest_memory(run: Any, agent_id: str = "", last_text: str = "") -> None:
                     "prompt": material,
                     "system": _EXTRACT_SYSTEM,
                     "stream": False,
-                    "options": {"num_ctx": min(int(num_ctx), 4096), "num_predict": 80},
+                    "options": {"num_ctx": min(int(num_ctx), 4096), "num_predict": 80, "num_gpu": 99},
                 },
                 timeout=(5, 45),
             )

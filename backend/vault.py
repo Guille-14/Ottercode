@@ -268,7 +268,7 @@ def _extract_user_insights(run: Any) -> str:
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json={"model": run.model, "prompt": material,
                       "system": _USER_INSIGHT_SYSTEM, "stream": False,
-                      "options": {"num_ctx": int(num_ctx), "num_predict": 256}},
+                      "options": {"num_ctx": int(num_ctx), "num_predict": 256, "num_gpu": 99}},
                 timeout=(10, 90))
             resp.raise_for_status()
             out = _ollama_ndjson_text(resp.text) or ""

@@ -771,8 +771,8 @@ class TaskRequest(BaseModel):
     task: str = Field(min_length=1, max_length=8000)
     model: str = DEFAULT_MODEL
     loop_mode: bool = False
-    mode: str = "chain"                  # "chain" | "chat"
-    start_agent: str = "architect"       # architect|researcher|developer|reviewer
+    mode: str = "chat"                   # "chat" (agente único) | "chain"
+    start_agent: str = "agent"           # chat: Otter; chain: se mapea a architect si hace falta
     hacker: bool = False                 # 🏴 prompt sin censura (denylist intacta)
     num_ctx: Optional[int] = Field(default=None, ge=2048, le=131072)
     force: bool = False                  # aborta la misión en curso y toma el relevo
@@ -809,6 +809,8 @@ def api_task(req: TaskRequest) -> StreamingResponse:
             _task_profile = _p
     if req.mode not in ("chain", "chat"):
         raise HTTPException(status_code=400, detail="mode debe ser 'chain' o 'chat'.")
+    if req.mode == "chain" and req.start_agent not in AGENT_ORDER:
+        req.start_agent = "architect"
     # v4.3 · 'agent' (Claude Code) solo tiene sentido en modo chat
     # v6.0 · Fase 1 · PERFILES: en modo chat puedes hablar con CUALQUIER
     # agente registrado (Otter, núcleo, presets o creados con la Fábrica).
@@ -975,6 +977,15 @@ def api_task(req: TaskRequest) -> StreamingResponse:
         """Puente cola+worker: si el modelo está cargando a VRAM y no fluyen
         tokens, emite heartbeats SSE (': heartbeat') para que ningún proxy
         o cliente corte la conexión por inactividad."""
+        # Un solo modelo en VRAM: el router pequeño no puede convivir con el
+        # especialista (8 GB → offload a CPU y ~10 tok/s).
+        if _decision.get("tipo") != "directo":
+            try:
+                from backend.router import ROUTER_MODEL
+                if ROUTER_MODEL and ROUTER_MODEL != run.model:
+                    flush_vram(ROUTER_MODEL)
+            except Exception:
+                pass
         if _decision.get("tipo") == "directo" and req.mode == "chat":
             try:
                 yield sse(SseEvent.session_id, {"task_id": run.task_id})
@@ -1479,6 +1490,35 @@ def api_mcp() -> Dict[str, Any]:
         }
     except Exception as exc:
         return {"ok": False, "ready": False, "servers": [], "tools": [], "error": str(exc)}
+
+
+@router.get(Route.TODOS)
+def api_todos(task_id: Optional[str] = None) -> Dict[str, Any]:
+    workdir, tid = _resolve_workspace(task_id)
+    p = workdir / ".otter_todo.json"
+    items: List[Dict[str, Any]] = []
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                items = [x for x in data if isinstance(x, dict)]
+        except (json.JSONDecodeError, OSError):
+            items = []
+    return {"ok": True, "task_id": tid, "todos": items}
+
+
+class CompactRequest(BaseModel):
+    task_id: Optional[str] = None
+
+
+@router.post(Route.COMPACT)
+def api_compact(req: CompactRequest) -> Dict[str, Any]:
+    tid = (req.task_id or "").strip()
+    run = ACTIVE_RUN.get(tid) if tid else (next(iter(ACTIVE_RUN.values()), None) if ACTIVE_RUN else None)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No hay misión activa para compactar.")
+    from backend.engine import compact_run_now
+    return compact_run_now(run)
 
 
 @router.post("/api/mission/undo")

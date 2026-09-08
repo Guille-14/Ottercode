@@ -55,12 +55,12 @@ export default function ChatHero({
       <ol className="mt-4 max-w-md space-y-1 text-left text-xs text-muted">
         <li>1. Elige un modelo en Ollama (o pulsa las tarjetas de abajo).</li>
         <li>2. En Ajustes puedes fijar la carpeta de tu repo.</li>
-        <li>3. YOLO en la barra desactiva permisos de escritura.</li>
+        <li>3. En Avanzado, «Sin confirmar» desactiva permisos de escritura.</li>
         <li>4. /ultraplan para planificar; Ejecutar cuando apruebes.</li>
       </ol>
 
       <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-3 py-1 text-xs text-muted">
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        <span className="h-1.5 w-1.5 rounded-full bg-accent" />
         <span>Modelo activo: <strong className="text-ink">{model}</strong></span>
         <span>·</span>
         <span>
@@ -79,7 +79,7 @@ export default function ChatHero({
               key={item.title}
               type="button"
               onClick={() => onSelectPrompt(F.chipFor(item.desc))}
-              className="group flex items-start gap-3 rounded-xl border border-line bg-panel/70 p-3.5 text-left transition-all hover:border-ink/40 hover:bg-panel hover:shadow-sm"
+              className="group flex items-start gap-3 rounded-xl border border-line bg-panel p-3.5 text-left transition-all hover:border-accent/40 hover:bg-panel2 hover:shadow-sm"
             >
               <div className="mt-0.5 rounded-lg border border-line bg-canvas p-2 text-muted transition-colors group-hover:text-ink">
                 <Icon className="h-4 w-4" />

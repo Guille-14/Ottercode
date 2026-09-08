@@ -9,7 +9,7 @@ import { api, type AgentInfo } from '../api'
 import { F, SLASH_COMMANDS } from '../features'
 import SlashPopup from '../SlashPopup'
 
-const DEFAULT_AGENTS = ['architect', 'researcher', 'developer', 'reviewer']
+const DEFAULT_AGENTS = ['agent', 'architect', 'researcher', 'developer', 'reviewer']
 
 export default function ChatInputBar({
   onLaunch,
@@ -36,33 +36,59 @@ export default function ChatInputBar({
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [task, setTask] = useState('')
-  const [mode, setMode] = useState<'chat' | 'chain'>('chat')
-  const [startAgent, setStartAgent] = useState('agent')
+  const mode = useUi((s) => s.agentMode)
+  const setMode = useUi((s) => s.setAgentMode)
+  const startAgent = useUi((s) => s.startAgent)
+  const setStartAgent = useUi((s) => s.setStartAgent)
   const [goal, setGoal] = useState('')
   const [planOnly, setPlanOnly] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [sel, setSel] = useState(0)
   const [agentsList, setAgentsList] = useState<AgentInfo[]>([])
+  const [attach, setAttach] = useState<{ name: string; preview?: string }[]>([])
+  const [dragOver, setDragOver] = useState(false)
+
+  const ingestFiles = (list: File[]) => {
+    const MAX_IMG = 1_000_000
+    const MAX_TXT = 80_000
+    for (const file of list) {
+      if (file.type.startsWith('image/')) {
+        if (file.size > MAX_IMG) {
+          useUi.getState().setNotice(`Imagen demasiado grande (${file.name}, máx. 1 MB)`)
+          continue
+        }
+        const reader = new FileReader()
+        reader.onload = (event) => {
+          const data = String(event.target?.result || '')
+          setAttach((a) => [...a, { name: file.name, preview: data }])
+          setTask((prev) => prev + `\n[Imagen adjunta: ${file.name} — el modelo recibe el nombre, no los píxeles]\n`)
+        }
+        reader.readAsDataURL(file)
+      } else {
+        if (file.size > MAX_TXT) {
+          useUi.getState().setNotice(`Archivo demasiado grande (${file.name}, máx. 80 KB de texto)`)
+          continue
+        }
+        const reader = new FileReader()
+        reader.onload = (event) => {
+          let content = String(event.target?.result || '')
+          if (content.length > MAX_TXT) content = content.slice(0, MAX_TXT) + '\n… (truncado)'
+          setAttach((a) => [...a, { name: file.name }])
+          setTask((prev) => prev + `\n[Archivo: ${file.name}]\n\`\`\`\n${content}\n\`\`\`\n`)
+        }
+        reader.readAsText(file)
+      }
+    }
+  }
 
   const changeMode = (m: 'chat' | 'chain') => {
     setMode(m)
-    // D · En cadena, el Arquitecto empieza planeando y delega; en agente único,
-    // el especializado en todo (Otter).
-    if (m === 'chain') setStartAgent('architect')
-    else setStartAgent('agent')
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const content = event.target?.result as string
-      const fileBlock = `\n[Archivo: ${file.name}]\n\`\`\`\n${content}\n\`\`\`\n`
-      setTask((prev) => prev + fileBlock)
-    }
-    reader.readAsText(file)
+    const files = e.target.files ? Array.from(e.target.files) : []
+    if (files.length) ingestFiles(files)
+    e.target.value = ''
   }
 
   useEffect(() => {
@@ -136,6 +162,7 @@ export default function ChatInputBar({
       }
       enqueueMission(trimmed, payload)
       setTask('')
+      setAttach([])
       return
     }
 
@@ -175,12 +202,32 @@ export default function ChatInputBar({
       yolo: yolo || Boolean(parsed.fields.yolo),
     })
     setTask('')
+    setAttach([])
   }
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pb-3">
       {/* Contenedor flotante estilo OpenWebUI */}
-      <div className="relative rounded-2xl border border-line bg-surface/90 p-3 shadow-sm backdrop-blur transition-all focus-within:border-accent/40 focus-within:shadow-md">
+      <div
+        className={`relative rounded-2xl border bg-surface/90 p-3 shadow-sm backdrop-blur transition-all focus-within:border-accent/40 focus-within:shadow-md ${dragOver ? 'border-accent' : 'border-line'}`}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDragOver(false)
+          ingestFiles(Array.from(e.dataTransfer.files || []))
+        }}
+      >
+        {attach.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {attach.map((a) => (
+              <span key={a.name} className="flex items-center gap-1 rounded-lg border border-line bg-panel px-2 py-1 text-[11px]">
+                {a.preview && <img src={a.preview} alt="" className="h-8 w-8 rounded object-cover" />}
+                {a.name}
+              </span>
+            ))}
+          </div>
+        )}
         {/* Autocomplete de slash commands */}
         {popupOpen && (
           <SlashPopup word={word} selected={sel} onPick={pickCommand} />
@@ -202,6 +249,7 @@ export default function ChatInputBar({
                   <span className="truncate font-medium text-muted">{item.text}</span>
                   <button
                     type="button"
+                    aria-label="Quitar de la cola"
                     onClick={() => dequeueMission(item.id)}
                     className="rounded p-0.5 text-muted hover:text-danger hover:bg-canvas transition-colors"
                     title="Quitar de la cola"
@@ -238,7 +286,7 @@ export default function ChatInputBar({
             title="Bucle programador↔revisor hasta aprobar (o límite)"
           >
             <RotateCcw className="h-3 w-3" />
-            Loop
+            Bucle
           </button>
           {loopMode && (
             <input
@@ -252,29 +300,6 @@ export default function ChatInputBar({
               title="Rondas máximas del bucle"
             />
           )}
-          <button
-            id="hackerBtn"
-            type="button"
-            onClick={() => setHacker(!hacker)}
-            className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-semibold border transition-colors ${
-              hacker ? 'bg-danger text-white border-danger' : 'bg-panel2 text-ink2 border-line2 hover:text-ink'
-            }`}
-            title="Modo hacker: LLM sin censura de contenido (la protección del sistema sigue intacta)"
-          >
-            <Skull className="h-3 w-3" />
-            Hacker
-          </button>
-          <button
-            id="yoloBtn"
-            type="button"
-            onClick={() => setYolo(!yolo)}
-            className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-semibold border transition-colors ${
-              yolo ? 'bg-accent text-accentink border-accent' : 'bg-panel2 text-ink2 border-line2 hover:text-ink'
-            }`}
-            title="YOLO: ejecutar herramientas peligrosas sin pedir permiso"
-          >
-            YOLO
-          </button>
           <button
             id="planBtn"
             type="button"
@@ -298,10 +323,33 @@ export default function ChatInputBar({
         {/* Panel expandible de opciones avanzadas */}
         {showSettings && (
           <div className="mb-2 grid gap-2 rounded-xl border border-line bg-panel2 p-3 text-xs sm:grid-cols-2">
+            <div className="sm:col-span-2 flex flex-wrap gap-2">
+              <button
+                id="hackerBtn"
+                type="button"
+                onClick={() => setHacker(!hacker)}
+                className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-semibold border ${
+                  hacker ? 'bg-danger text-white border-danger' : 'bg-canvas text-ink2 border-line2'
+                }`}
+              >
+                <Skull className="h-3 w-3" />
+                Sin censura
+              </button>
+              <button
+                id="yoloBtn"
+                type="button"
+                onClick={() => setYolo(!yolo)}
+                className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-semibold border ${
+                  yolo ? 'bg-accent text-accentink border-accent' : 'bg-canvas text-ink2 border-line2'
+                }`}
+              >
+                Sin confirmar herramientas
+              </button>
+            </div>
             {hacker && (
               <div className="sm:col-span-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-[11px] text-danger">
-                Modo hacker activo: el LLM responde sin censura de contenido. La
-                protección del sistema (denylist de bash, guard SSRF) sigue intacta.
+                Sin censura: el modelo responde sin filtro de contenido. La
+                protección del sistema (denylist de bash, guardia SSRF) sigue activa.
               </div>
             )}
             <div>
@@ -323,15 +371,12 @@ export default function ChatInputBar({
                 value={startAgent}
                 onChange={(e) => setStartAgent(e.target.value)}
               >
-                {agentsList.length > 0
-                  ? agentsList.map((a) => (
+                {(agentsList.length > 0
+                  ? agentsList
+                  : DEFAULT_AGENTS.map((id) => ({ id, icon: '', nombre: id }))
+                ).map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.icon} {a.nombre}
-                      </option>
-                    ))
-                  : DEFAULT_AGENTS.map((a) => (
-                      <option key={a} value={a}>
-                        {a}
                       </option>
                     ))}
               </select>
@@ -348,7 +393,7 @@ export default function ChatInputBar({
 
         {/* Textarea auto-ajustable con Enter para enviar */}
         <div className="flex items-end gap-2">
-          <button type="button" onClick={() => fileInputRef.current?.click()} className="mb-2 text-muted hover:text-ink">
+          <button type="button" aria-label="Adjuntar archivo" onClick={() => fileInputRef.current?.click()} className="mb-2 text-muted hover:text-ink">
             <Paperclip className="h-5 w-5" />
           </button>
           <input
@@ -356,7 +401,7 @@ export default function ChatInputBar({
             ref={fileInputRef}
             className="hidden"
             onChange={handleFileChange}
-            accept=".py,.js,.json,.md,.rs,.txt,.css,.html"
+            accept="image/*,.py,.js,.json,.md,.rs,.txt,.css,.html"
           />
           <textarea
             className="max-h-48 min-h-[52px] w-full resize-none bg-transparent px-1 py-1 text-sm text-ink placeholder:text-muted focus:outline-none focus-visible:outline-none"
@@ -367,6 +412,13 @@ export default function ChatInputBar({
               setSel(0)
             }}
             onKeyDown={onKeyDown}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData?.files || [])
+              if (files.length) {
+                e.preventDefault()
+                ingestFiles(files)
+              }
+            }}
             placeholder="Pregunta o describe la tarea… (escribe / para comandos)"
           />
 
@@ -375,6 +427,7 @@ export default function ChatInputBar({
             {streaming && (
               <button
                 type="button"
+                aria-label="Detener generación"
                 onClick={onStop}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-danger/30 bg-danger/10 text-danger transition-all hover:bg-danger hover:text-white"
                 title="Detener generación actual"
@@ -384,6 +437,7 @@ export default function ChatInputBar({
             )}
             <button
               type="button"
+              aria-label={streaming ? 'Añadir a la cola' : 'Enviar mensaje'}
               onClick={handleSend}
               disabled={!task.trim()}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-accentink shadow-sm transition-all hover:opacity-90 disabled:opacity-30"

@@ -69,6 +69,8 @@ class Route:
     CHECKPOINTS = "/api/checkpoints"
     PROJECT = "/api/project"
     MCP = "/api/mcp"
+    COMPACT = "/api/compact"
+    TODOS = "/api/todos"
 
 
 class SseEvent(Enum):

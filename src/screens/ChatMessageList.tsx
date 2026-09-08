@@ -196,6 +196,43 @@ function PlanCard({
   )
 }
 
+function ErrorCard({
+  data,
+  canRetry,
+  onRetry,
+}: {
+  data: Record<string, unknown>
+  canRetry: boolean
+  onRetry: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const typeName = String(data.error_type ?? '')
+  const raw = String(data.detail || data.message || 'Error en la misión')
+  const step = String(data.step ?? '')
+  const headline = typeName ? `Error: ${typeName}` : raw.split('\n')[0]
+  return (
+    <div className="rounded-xl border border-danger/30 bg-danger/5 p-3 text-xs text-danger">
+      <div className="flex items-start justify-between gap-2">
+        <button
+          type="button"
+          title={raw}
+          onClick={() => setOpen((v) => !v)}
+          className="min-w-0 flex-1 text-left font-semibold hover:underline"
+        >
+          {headline}
+        </button>
+        <Button variant="ghost" onClick={onRetry} className="h-7 shrink-0 text-xs" disabled={!canRetry}>
+          <RotateCcw className="mr-1 h-3 w-3" /> Reintentar
+        </Button>
+      </div>
+      <p className="mt-2 whitespace-pre-wrap text-[11px] text-ink" title={raw}>
+        {open ? raw : raw.slice(0, 280) + (raw.length > 280 ? '…' : '')}
+        {step ? ` · paso: ${step}` : ''}
+      </p>
+    </div>
+  )
+}
+
 function SalvageProgressCard({ text }: { text: string }) {
   return (
     <div className="flex items-center gap-3 rounded-xl border border-accent/30 bg-accent/10 p-3 text-xs text-accent">
@@ -450,14 +487,11 @@ export default function ChatMessageList({
 
       {/* Tarjeta de error con Reintentar */}
       {lastDone?.name === 'task_error' && (
-        <div className="flex items-center justify-between rounded-xl border border-danger/30 bg-danger/5 p-3 text-xs text-danger">
-          <span>{String(lastDone.data.message ?? 'Error en la misión')}</span>
-          {canRetry && !streaming && (
-            <Button variant="ghost" onClick={onRetry} className="h-7 text-xs">
-              <RotateCcw className="mr-1 h-3 w-3" /> Reintentar
-            </Button>
-          )}
-        </div>
+        <ErrorCard
+          data={lastDone.data}
+          canRetry={canRetry && !streaming}
+          onRetry={onRetry}
+        />
       )}
 
       {/* Descarga ZIP cuando terminó */}

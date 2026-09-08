@@ -1,9 +1,11 @@
+import json
 import os
 import threading
+import traceback
 import uuid
 import tools
 from pathlib import Path
-from typing import Iterator, Optional, Dict, Any
+from typing import Iterator, Optional, Dict, Any, List, Tuple
 
 # FASE 5 · Gate de permisos para herramientas destructivas
 PENDING_PERMISSIONS: Dict[str, threading.Event] = {}
@@ -42,10 +44,10 @@ from backend.vault import memory_note_for_run  # noqa: E402
 from backend.runtime import _activity_finish  # noqa: E402
 from backend.runstate import OtterRun, _condense_entries, append_checkpoint, note_stall, resume_summary  # noqa: E402
 from backend.prompts import _looks_like_tool_attempt, _prev_conversation_block, alias_args, build_architect_prompt, build_chat_prompt, build_developer_prompt, build_expert_prompt, build_researcher_prompt, build_reviewer_prompt, extract_injections, extract_tool_call, format_tool_result, is_approved  # noqa: E402
-from backend.ollama import _estimate_tokens, _ollama_ndjson_text, flush_vram, stream_llm  # noqa: E402
+from backend.ollama import ContextOverflow, _estimate_tokens, _ollama_ndjson_text, flush_vram, stream_llm  # noqa: E402
 from backend.history import TOOL_CAPABLE_MODELS, save_session  # noqa: E402
 from backend.db import save_session_to_db  # noqa: E402
-from backend.config import HACKER_SUFFIX, LLM_BACKEND, MAX_INJECTIONS, MAX_TOOL_STEPS, NUM_CTX_DEFAULT, OLLAMA_BASE_URL  # noqa: E402
+from backend.config import HACKER_SUFFIX, LLM_BACKEND, MAX_INJECTIONS, MAX_TOOL_STEPS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL  # noqa: E402
 from backend.agents import AGENT_ORDER, Agent, DYNAMIC_AGENTS, ULTRAREVIEW_SUFFIX, _CORE_BASE_PROMPTS, _agent_meta, _chat_base, get_agent, skill_enabled, tool_protocol  # noqa: E402
 from backend.agents import *  # noqa: F401,F403
 from backend.prompts import *  # noqa: F401,F403
@@ -62,11 +64,109 @@ from backend.memory import get_memory, harvest_memory  # noqa
 
 _COMPACT_SYSTEM = (
     "Eres el compresor de memoria de OtterCode. Resume el estado del trabajo "
-    "en ESPAÑOL, máximo 220 palabras, en este formato exacto:\n"
-    "OBJETIVO: <una línea>\nHECHO: <lista compacta de logros>\n"
-    "PENDIENTE: <lista compacta de lo que falta>\nDATOS CLAVE: <rutas de "
-    "archivos, nombres y decisiones que NO deben perderse>."
+    "en ESPAÑOL. Formato exacto:\n"
+    "OBJETIVO: <una línea>\nHECHO: <logros>\n"
+    "PENDIENTE: <lo que falta>\nDATOS CLAVE: <rutas, flags, versiones>\n"
+    "ERRORES LITERALES: <mensajes de error PEGADOS COMPLETOS, sin parafrasear>\n"
+    "RESTRICCIONES DEL USUARIO: <preferencias y vetos explícitos>\n"
+    "DEPURACIÓN: <qué se probó, qué se descartó, con qué evidencia>\n"
+    "REGLAS: conserva CUALQUIER contenido pegado por el usuario (logs, stack "
+    "traces, fragmentos de config) palabra por palabra. Conserva nombres de "
+    "flags, rutas, números de versión y mensajes de error exactos. No inventes "
+    "ni suavices. Máximo 400 palabras salvo citas literales de error."
 )
+_COMPACT_TAIL_N = int(os.environ.get("OTTERCODE_COMPACT_TAIL", "6") or "6")
+_TODO_IDLE_MAX = int(os.environ.get("OTTERCODE_TODO_IDLE_MAX", "3") or "3")
+_RESCUE_MAX_TRIES = int(os.environ.get("OTTERCODE_RESCUE_TRIES", "3") or "3")
+
+
+def _reserved_output_tokens(run: Any) -> int:
+    pred = getattr(run, "num_predict", None)
+    if pred is None:
+        pred = os.environ.get("OTTERCODE_NUM_PREDICT") or NUM_PREDICT_DEFAULT
+    try:
+        return max(256, int(pred))
+    except (TypeError, ValueError):
+        return int(NUM_PREDICT_DEFAULT)
+
+
+def _active_num_ctx(run: Any) -> int:
+    try:
+        return max(1024, int(getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT))
+    except (TypeError, ValueError):
+        return int(NUM_CTX_DEFAULT)
+
+
+def _compact_threshold(run: Any) -> int:
+    num_ctx = _active_num_ctx(run)
+    reserved = min(_reserved_output_tokens(run), num_ctx // 2)
+    return max(512, num_ctx - reserved)
+
+
+def _call_token_estimate(run: Any, system_prompt: str, prompt: str = "") -> int:
+    hist = "".join(str(m.get("content") or "") for m in (getattr(run, "messages", None) or []))
+    tools_blob = ""
+    try:
+        tools_blob = json.dumps(tools.get_ollama_tools(), ensure_ascii=False)[:80_000]
+    except Exception:
+        tools_blob = "x" * 1600
+    return (
+        _estimate_tokens(system_prompt)
+        + _estimate_tokens(hist)
+        + _estimate_tokens(prompt)
+        + _estimate_tokens(tools_blob)
+    )
+
+
+def _preflight_eval(run: Any, system_prompt: str, prompt: str = "") -> Dict[str, Any]:
+    try:
+        est = _call_token_estimate(run, system_prompt, prompt)
+        thresh = _compact_threshold(run)
+        num_ctx = _active_num_ctx(run)
+        reserved = min(_reserved_output_tokens(run), num_ctx // 2)
+        over = est > thresh
+    except Exception as exc:  # noqa: BLE001
+        rec = {
+            "preflight": True, "est": 0, "thresh": 10**9,
+            "num_ctx": _active_num_ctx(run), "reserved": 0, "over": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        run._last_compact_eval = rec
+        return rec
+    rec = {
+        "preflight": True, "est": est, "thresh": thresh,
+        "num_ctx": num_ctx, "reserved": reserved, "over": over,
+    }
+    run._last_compact_eval = rec
+    return rec
+
+
+def _set_step(run: Any, step: str) -> None:
+    run._current_step = step
+
+
+def _log_uncaught(run: Any, exc: BaseException, step: Optional[str] = None) -> str:
+    """D1: traceback completo al log + línea en JSONL. Devuelve resumen de 1 línea."""
+    step = step or str(getattr(run, "_current_step", "") or "desconocido")
+    tid = getattr(run, "task_id", "") or "?"
+    et = type(exc).__name__
+    one = f"{et}: {exc}"[:400]
+    tb = traceback.format_exc()
+    print(f"[ottercode] UNCAUGHT mission_id={tid} step={step}\n{tb}", flush=True)
+    try:
+        append_checkpoint(
+            run, kind="error", done=one,
+            decisions=f"step={step}", pending="diagnóstico / reintentar",
+            next_action="Reintentar desde checkpoint (no regenerar desde cero)",
+            extra={"error_type": et, "step": step, "traceback": tb[-4000:]},
+        )
+    except Exception:
+        pass
+    return one
+
+
+class RescueStalled(RuntimeError):
+    """Rescate/completación falló 3 veces sobre el mismo archivo."""
 
 
 import backend.config as _otter_cfg  # noqa: E402
@@ -101,7 +201,7 @@ def _compact_context(run: Any, agent_id: str, entries: List[Tuple[str, str]]) ->
             json={
                 "model": run.model, "prompt": condensed,
                 "system": _COMPACT_SYSTEM, "stream": False,
-                "options": {"num_ctx": int(num_ctx), "num_predict": 512},
+                "options": {"num_ctx": int(num_ctx), "num_predict": 512, "num_gpu": 99},
             },
             timeout=(10, 120),
         )
@@ -111,27 +211,59 @@ def _compact_context(run: Any, agent_id: str, entries: List[Tuple[str, str]]) ->
         return None
 
 
-def _maybe_compact_messages(run: Any, agent_id: str, system_prompt: str) -> Optional[str]:
-    """L2: compacta si >75% num_ctx o cada N llamadas LLM."""
-    every = int(os.environ.get("OTTERCODE_COMPACT_EVERY", "6") or "6")
-    run._llm_calls = int(getattr(run, "_llm_calls", 0) or 0) + 1
-    num_ctx = getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT
-    limit = int(int(num_ctx) * 0.75)
-    est = (_estimate_tokens(system_prompt)
-           + sum(_estimate_tokens(m.get("content", "")) for m in (run.messages or [])))
-    periodic = every > 0 and run._llm_calls % every == 0 and len(run.messages or []) > 6
-    over = est > limit and len(run.messages or []) > 6
-    if not (periodic or over):
+def _maybe_compact_messages(run: Any, agent_id: str, system_prompt: str,
+                            prompt: str = "", force: bool = False) -> Optional[str]:
+    """T1: compactación PREFLIGHT (antes de la llamada, nunca a mitad de generación).
+
+    Umbral = num_ctx activo − margen de salida reservado.
+    T3: si una compactación no baja del umbral, no se reintenta en el mismo paso.
+    Nunca lanza: un fallo aquí no debe abortar la misión.
+    """
+    try:
+        run._llm_calls = int(getattr(run, "_llm_calls", 0) or 0) + 1
+        ev = _preflight_eval(run, system_prompt, prompt)
+        if getattr(run, "_compact_blocked", False) and not force:
+            return None
+        if not force and not ev.get("over"):
+            return None
+        msgs = list(run.messages or [])
+        if len(msgs) < 3 and not force:
+            return None
+        tail_n = max(2, min(_COMPACT_TAIL_N, len(msgs)))
+        tail = msgs[-tail_n:]
+        old = msgs[1:-tail_n] if len(msgs) > tail_n + 1 else msgs[1:-2] if len(msgs) > 3 else []
+        _cond = [(m.get("content", ""), "") for m in old]
+        _summ = _compact_context(run, agent_id, _cond) or "(historial antiguo truncado)"
+        head = msgs[:1] if msgs else []
+        run.messages = (
+            head
+            + [{"role": "user", "content": (
+                "[CHECKPOINT DE COMPACTACIÓN — resumen + cola reciente SIN resumir]\n"
+                f"{_summ}\n\n"
+                "El historial original sigue en el JSONL de la misión; este bloque "
+                "es lo que se envía al modelo."
+            )}]
+            + tail
+        )
+        after = _call_token_estimate(run, system_prompt, prompt)
+        still_over = after > int(ev.get("thresh") or 0)
+        if still_over:
+            run._compact_blocked = True
+        try:
+            append_checkpoint(
+                run, kind="compact", done="compactación de contexto (preflight)",
+                decisions=_summ[:800], pending="cola reciente intacta",
+                next_action="llamar al modelo" if not still_over else "aviso: sigue demasiado grande",
+                extra={"est_before": ev.get("est"), "est_after": after, "still_over": still_over,
+                       "tail_n": tail_n, "num_ctx": ev.get("num_ctx")},
+            )
+        except Exception:
+            pass
+        run._last_compact_eval = {**ev, "est_after": after, "still_over": still_over, "compacted": True}
+        return _summ
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ottercode] compact skipped: {type(exc).__name__}: {exc}", flush=True)
         return None
-    _old = run.messages[1:-4] if len(run.messages) > 5 else run.messages[1:]
-    _cond = [(m.get("content", ""), "") for m in _old if m.get("role") == "assistant"]
-    _summ = _compact_context(run, agent_id, _cond) or "(historial antiguo truncado)"
-    run.messages = (run.messages[:1]
-                    + [{"role": "user", "content": f"[RESUMEN DEL CONTEXTO ANTERIOR]\n{_summ}"}]
-                    + run.messages[-4:])
-    append_checkpoint(run, kind="compact", done="compactación de contexto",
-                      decisions=_summ[:400], pending="", next_action="seguir con el resumen")
-    return _summ
 
 
 def _thermal_ease(run: Any) -> Optional[str]:
@@ -315,7 +447,18 @@ def run_simple_agent(
         yield sse(SseEvent.system, {
             "text": f"⚠️ VRAM flush no confirmado ({flush.get('error', flush.get('detail'))})"
         })
-    text, _stats = yield from stream_llm(run, agent_id, system_prompt, prompt)  # type: ignore[misc]
+    _eval = _preflight_eval(run, system_prompt, prompt)
+    yield sse(SseEvent.system, {
+        "text": (f"🗜️ preflight ANTES de llamar al modelo: est={_eval['est']} tok · "
+                 f"umbral={_eval['thresh']} (num_ctx={_eval['num_ctx']} − reserva="
+                 f"{_eval['reserved']}) · compactar={'sí' if _eval['over'] else 'no'}")
+    })
+    _maybe_compact_messages(run, agent_id, system_prompt, prompt=prompt)
+    try:
+        text, _stats = yield from stream_llm(run, agent_id, system_prompt, prompt)  # type: ignore[misc]
+    except ContextOverflow:
+        _maybe_compact_messages(run, agent_id, system_prompt, prompt=prompt, force=True)
+        text, _stats = yield from stream_llm(run, agent_id, system_prompt, prompt)  # type: ignore[misc]
     run.transcript.append({"kind": "agent", "agent": agent_id, "iteration": iteration, "text": text})
     yield sse(SseEvent.agent_end, {"agent": agent_id, "iteration": iteration})
     try:
@@ -439,6 +582,7 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         tools.ToolExecutor(run.workdir, readonly=True) if agent.readonly else run.executor
     )
 
+    _set_step(run, f"agent_turn:{agent_id}:iter{iteration}")
     yield sse(SseEvent.agent_start, {"agent": agent_id, "iteration": iteration, **meta})
     # ⚓ REGLA DE ORO (v4.8): los turnos de CONTINUACIÓN del mismo agente
     # (correctivos/de completación) llaman con flush=False — el modelo YA está
@@ -464,11 +608,28 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         _th = _thermal_ease(run)
         if _th:
             yield sse(SseEvent.system, {"text": _th})
-        _summ = _maybe_compact_messages(run, agent_id, system_prompt)
-        if _summ:
+        _eval = _preflight_eval(run, system_prompt, prompt)
+        if _eval.get("over"):
             yield sse(SseEvent.system, {
-                "text": f"🗜️ Compactación automática (75% ctx o cada N turnos): {len(_summ)} chars."
+                "text": (f"🗜️ preflight: est={_eval['est']} tok · umbral={_eval['thresh']} "
+                         f"(num_ctx={_eval['num_ctx']} − reserva={_eval['reserved']}) → compactar")
             })
+        try:
+            _summ = _maybe_compact_messages(run, agent_id, system_prompt, prompt=prompt)
+        except Exception as _cx:  # noqa: BLE001
+            _summ = None
+            print(f"[ottercode] compact swallow: {_cx}", flush=True)
+        if _summ:
+            _after = getattr(run, "_last_compact_eval", {}) or {}
+            if _after.get("still_over"):
+                yield sse(SseEvent.system, {
+                    "text": "⚠️ el contexto sigue siendo demasiado grande tras compactar. "
+                            "Esperando acción explícita (Compactar ahora) — no se reintenta en bucle."
+                })
+            else:
+                yield sse(SseEvent.system, {
+                    "text": f"🗜️ Compactación preflight: {len(_summ)} chars de resumen + cola reciente."
+                })
             run.transcript.append({"kind": "system", "text": f"🗜️ contexto compactado ({len(_summ)} chars)."})
         steps += 1
         # v4.4 · cada generación arranca con el parcial a cero
@@ -478,6 +639,24 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
             pass
         try:
             last_text, _stats = yield from stream_llm(run, agent_id, system_prompt, prompt)  # type: ignore[misc]
+        except ContextOverflow:
+            if getattr(run, "_overflow_retried", False):
+                yield sse(SseEvent.system, {
+                    "text": "❌ Desbordamiento de contexto tras un reintento. Intervención humana."
+                })
+                raise RuntimeError("contexto desbordado tras compactar y reintentar una vez")
+            run._overflow_retried = True
+            yield sse(SseEvent.system, {
+                "text": "⚠️ Ollama: contexto lleno. Compactando y reintentando este paso UNA vez…"
+            })
+            _maybe_compact_messages(run, agent_id, system_prompt, prompt=prompt, force=True)
+            try:
+                last_text, _stats = yield from stream_llm(run, agent_id, system_prompt, prompt)  # type: ignore[misc]
+            except ContextOverflow:
+                yield sse(SseEvent.system, {
+                    "text": "❌ El contexto volvió a desbordar tras compactar. No se reintenta más."
+                })
+                raise RuntimeError("contexto desbordado tras compactar y reintentar una vez")
         except AbortRequested:
             # v4.4 · aborto en plena generación: lo generado se conserva
             if getattr(run, "_partial_text", ""):
@@ -531,9 +710,7 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
             # feedback adaptado: si era gigante fue CORTADO → partes.
             if _looks_like_tool_attempt(parse_text) and steps < max_steps:
                 huge = len(parse_text) > 8000
-                # 🛟 v4.8 · SALVAJE DE JSON CORTADO: si el JSON llevaba un archivo
-                # grande, el contenido parcial está ÍNTEGRO — se escribe DIRECTO
-                # en vez de pedir reemisión (que re-vuelca todo y re-se corta).
+                # 🛟 v4.8 · SALVAJE DE JSON CORTADO: s         # en vez de pedir reemisión (que re-vuelca todo y re-se corta).
                 salv = _salvage_cut_json(parse_text)   # v5.0.1 · sin umbral: el salvamento ya valida ≥500
                 if salv and not agent.readonly:
                     s_nombre, s_contenido = salv
@@ -645,6 +822,26 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                 {"kind": "tool", "tool": tool_name, "agent": agent_id, "iteration": iteration,
                  "args": args, "ok": True, "output": resumen or "finalizado"}
             )
+            idle_n = int(getattr(run, "_todo_idle", 0) or 0)
+            pending_todos = _pending_todo_items(run)
+            if pending_todos and idle_n < _TODO_IDLE_MAX:
+                run._todo_idle = idle_n + 1
+                nleft = _TODO_IDLE_MAX - run._todo_idle
+                reminder = (
+                    "RECORDATORIO AUTOMÁTICO: hay ítems de Todo pendientes o en curso:\n"
+                    + "\n".join(f"- [{t.get('status')}] {t.get('content')}" for t in pending_todos[:12])
+                    + "\nContinúa el siguiente ítem pendiente. No finalices todavía."
+                )
+                yield sse(SseEvent.system, {
+                    "text": f"📋 Todo incompleto: recordatorio {run._todo_idle}/{_TODO_IDLE_MAX}."
+                })
+                run.messages.append({"role": "user", "content": reminder})
+                continue
+            if pending_todos and idle_n >= _TODO_IDLE_MAX:
+                yield sse(SseEvent.system, {
+                    "text": "🛑 Todo a medias tras varios recordatorios sin progreso. "
+                            "Intervención del usuario — no se insiste más."
+                })
             break
 
         if tool_name not in allowed:
@@ -707,6 +904,9 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         })
         _activity_set(last_tool=title, last_tool_ok=None)
         result = executor.dispatch(tool_name, args)
+        if result.get("ok") and tool_name == "todo_write":
+            run._todo_idle = 0
+            yield sse(SseEvent.system, {"text": "📋 Todo actualizado (persistido en disco)."})
         if result.get("ok") and tool_name in ("write_file", "append_file", "edit_file"):
             fp = str(args.get("filepath") or args.get("path") or "")
             out = str(result.get("output") or "")
@@ -786,6 +986,38 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
 # ---------------------------------------------------------------------------
 # El relevo completo (AgentLoop) + meta-orquestación
 # ---------------------------------------------------------------------------
+
+def _pending_todo_items(run: Any) -> List[Dict[str, Any]]:
+    try:
+        p = Path(run.workdir) / ".otter_todo.json"
+        if not p.is_file():
+            return []
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for it in data:
+        if not isinstance(it, dict):
+            continue
+        st = str(it.get("status") or "pending").lower()
+        if st in ("pending", "pendiente", "in_progress", "en curso", "en_curso"):
+            out.append(it)
+    return out
+
+
+def compact_run_now(run: Any, agent_id: str = "agent") -> Dict[str, Any]:
+    """T4: compactación manual (siempre disponible)."""
+    sys_p = ""
+    try:
+        sys_p = str((run.messages or [{}])[0].get("content") or "")
+    except Exception:
+        sys_p = ""
+    summ = _maybe_compact_messages(run, agent_id, sys_p, force=True)
+    ev = getattr(run, "_last_compact_eval", {}) or {}
+    return {"ok": True, "summary": (summ or "")[:800], **ev}
+
 
 _WRITE_TOOLS = {"write_file", "append_file", "edit_file", "mkdir", "python_exec"}
 _EXPLORE_TOOLS = {"tree", "list_dir", "read_file", "grep_search", "glob_files",
@@ -984,6 +1216,78 @@ def _rescue_code_from_text(run: OtterRun, agent_id: str, text: str) -> Iterator[
     return nombre  # type: ignore[return-value]
 
 
+def _complete_rescued_file(run: OtterRun, target: str) -> Iterator[str]:
+    """D2: completación por partes con preflight, backoff Ollama y stall×3."""
+    _set_step(run, f"rescue_complete:{target}")
+    yield sse(SseEvent.system, {
+        "text": "🛟 El archivo rescatado estaba incompleto (generación "
+                "cortada): Otter lo va a completar por partes…"
+    })
+    tries = max(1, _RESCUE_MAX_TRIES)
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, tries + 1):
+        if run.aborted:
+            raise AbortRequested()
+        _set_step(run, f"rescue_complete:{target}:try{attempt}")
+        corr_trunc = (
+            "COMPLETACIÓN OBLIGATORIA: el archivo principal se creó pero "
+            "quedó INCOMPLETO (la generación anterior se cortó a mitad). "
+            f"El archivo es EXACTAMENTE «{target}»: usa "
+            f"append_file con filepath=\"{target}\". "
+            "NO crees NI toques ningún otro archivo. "
+            "1) Continúalo con append_file POR PARTES (≤150 líneas por "
+            "llamada) hasta que el archivo termine correctamente "
+            "(p. ej. cerrando </html>). 2) Después emite finalizar. "
+            "NO lo reescribas desde cero: continúa lo que ya hay. "
+            "En este turno write_file está DESHABILITADO: solo puedes "
+            "append_file, read_file y finalizar."
+        )
+        try:
+            _tail = (run.workdir / target).read_text(encoding="utf-8")[-1200:]
+            corr_trunc += (
+                f"\n\nAQUÍ ESTÁ EL FINAL ACTUAL DE «{target}»"
+                " — continúa "
+                "EXACTAMENTE desde donde acaba (NO uses read_file, ya lo "
+                "tienes aquí; NO reescribas lo que existe):\n"
+                f"{_tail}\n"
+                f"Tu PRÓXIMA llamada es append_file con filepath="
+                f"\"{target}\" y SOLO la siguiente "
+                "parte (≤150 líneas)."
+            )
+        except OSError:
+            pass
+        try:
+            yield from run_agent_turn(
+                run, run.start_agent, 1, corr_trunc,
+                flush=False, max_steps=12,
+                only_tools={"append_file", "read_file", "finalizar"})
+            return
+        except AbortRequested:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            _log_uncaught(run, exc, step=f"rescue_complete:{target}:try{attempt}")
+            stalled = note_stall(run, f"rescue:{target}", str(exc), limit=tries)
+            yield sse(SseEvent.system, {
+                "text": (f"⚠️ Completación de «{target}» falló "
+                         f"({type(exc).__name__}: {exc}) — "
+                         f"intento {attempt}/{tries}.")
+            })
+            if stalled or attempt >= tries:
+                raise RescueStalled(
+                    f"El rescate de «{target}» falló {tries} veces seguidas: "
+                    f"{type(exc).__name__}: {exc}. Pulsa Reintentar para "
+                    f"continuar desde el archivo ya escrito, no desde cero."
+                ) from exc
+            wait = min(32, 2 ** attempt)
+            yield sse(SseEvent.system, {
+                "text": f"⏳ Reintento automático de completación en {wait}s…"
+            })
+            time.sleep(wait)
+    if last_exc:
+        raise last_exc
+
+
 def run_task_stream(run: OtterRun) -> Iterator[str]:
     """Ejecuta la misión (cadena delegada o chat directo) y emite SSE en vivo."""
     started = time.time()
@@ -1049,56 +1353,7 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
             if (_salv_trunc
                     or (_rescue_needed_chat and getattr(run, "_rescue_truncated", False))
                     ) and not getattr(run, "plan_only", False) and not run.aborted:
-                yield sse(SseEvent.system, {
-                    "text": "🛟 El archivo rescatado estaba incompleto (generación "
-                            "cortada): Otter lo va a completar por partes…"
-                })
-                corr_trunc = (
-                    "COMPLETACIÓN OBLIGATORIA: el archivo principal se creó pero "
-                    "quedó INCOMPLETO (la generación anterior se cortó a mitad). "
-                    f"El archivo es EXACTAMENTE «{rescued or 'index.html'}»: usa "
-                    f"append_file con filepath=\"{rescued or 'index.html'}\". "
-                    "NO crees NI toques ningún otro archivo. "
-                    "1) Continúalo con append_file POR PARTES (≤150 líneas por "
-                    "llamada) hasta que el archivo termine correctamente "
-                    "(p. ej. cerrando </html>). 2) Después emite finalizar. "
-                    "NO lo reescribas desde cero: continúa lo que ya hay. "
-                    "En este turno write_file está DESHABILITADO: solo puedes "
-                    "append_file, read_file y finalizar."
-                )
-                # v4.8 · inyecta la COLA del archivo: sin esto el modelo entra
-                # en bucle read_file→divagar→read_file y quema miles de tokens
-                # sin escribir NUNCA. Con la cola en el prompt no hay excusa.
-                try:
-                    _tail = (run.workdir / _target_file).read_text(encoding="utf-8")[-1200:]
-                    corr_trunc += (
-                        f"\n\nAQUÍ ESTÁ EL FINAL ACTUAL DE «{_target_file}»"
-                        " — continúa "
-                        "EXACTAMENTE desde donde acaba (NO uses read_file, ya lo "
-                        "tienes aquí; NO reescribas lo que existe):\n"
-                        f"{_tail}\n"
-                        f"Tu PRÓXIMA llamada es append_file con filepath="
-                        f"\"{_target_file}\" y SOLO la siguiente "
-                        "parte (≤150 líneas)."
-                    )
-                except OSError:
-                    pass
-                try:
-                    yield from run_agent_turn(
-                        run, run.start_agent, 1, corr_trunc,
-                        flush=False, max_steps=12,
-                        only_tools={"append_file", "read_file", "finalizar"})
-                except Exception as exc:  # noqa: BLE001
-                    run.transcript.append(
-                        {"kind": "system",
-                         "text": (f"⚠️ No se pudo completar el turno de completación "
-                                  f"({type(exc).__name__}); el archivo rescatado se "
-                                  f"conserva tal cual.")}
-                    )
-                    yield sse(SseEvent.system, {
-                        "text": "⚠️ No se pudo completar el archivo rescatado "
-                                "(modelo ocupado/lento); el archivo se conserva."
-                    })
+                yield from _complete_rescued_file(run, _target_file)
             # 🛟 v4.5 · CORRECCIÓN OBLIGATORIA (UNA sola vez): había código en
             # el texto pero el rescate no pudo guardar nada (p.ej. lenguaje
             # desconocido) → un turno correctivo que obliga a escribir archivos
@@ -1235,7 +1490,28 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
         context = ""
         expert_reports: List[str] = []
         injected: List[Agent] = []
-        start_idx = AGENT_ORDER.index(run.start_agent)
+        start_idx = 0
+        try:
+            start_idx = AGENT_ORDER.index(run.start_agent)
+        except ValueError:
+            # «agent» (Otter) no forma parte de la cadena: ejecutar como chat.
+            run.mode = "chat"
+            run.start_agent = "agent"
+            prompt = build_chat_prompt(run)
+            last_text_chat = yield from run_agent_turn(  # type: ignore[misc]
+                run, "agent", 1, prompt)
+            run.files_report = run.executor.list_workspace()
+            run.iterations = 1
+            run.elapsed = round(time.time() - started, 1)
+            _memory_finish(run, "done")
+            yield sse(SseEvent.task_done, {
+                "task_id": run.task_id, "mode": "chat", "approved": run.approved,
+                "iterations": 1, "files": run.files_report,
+                "duration_s": run.elapsed, "review_verdict": "",
+                "injected_agents": [],
+            })
+            _activity_finish("done")
+            return
         # v4.1 · ▶ EJECUTAR PLAN APROBADO: con resume_plan se saltan
         # Arquitecto e Investigador (el plan ya fue aprobado por el usuario).
         if resumed:
@@ -1470,11 +1746,17 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
         yield sse(SseEvent.task_aborted, {"task_id": run.task_id})
         _activity_finish("aborted")
     except Exception as exc:  # noqa: BLE001 — el error viaja por el stream
-        run.transcript.append({"kind": "system", "text": f"❌ {type(exc).__name__}: {exc}"})
+        one = _log_uncaught(run, exc)
+        run.transcript.append({"kind": "system", "text": f"❌ {one}"})
         _memory_finish(run, "error")
-        # Sanitizar: no exponer paths internos ni traceback al cliente
-        safe_msg = f"Error: {type(exc).__name__}"
-        yield sse(SseEvent.task_error, {"message": safe_msg})
+        detail = str(exc)[:800] or type(exc).__name__
+        yield sse(SseEvent.task_error, {
+            "message": f"Error: {type(exc).__name__}: {detail}",
+            "error_type": type(exc).__name__,
+            "detail": detail,
+            "step": getattr(run, "_current_step", "") or "",
+            "task_id": run.task_id,
+        })
         _activity_finish("error")
     finally:
         run.meta["approved"] = run.approved
@@ -1487,4 +1769,3 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
             save_session_to_db(run) # FASE 2 · SQLite + FTS5
         except Exception as _e:  # noqa: BLE001
             print(f"[WARN] Persistencia fallida para {run.task_id}: {_e}", flush=True)
-

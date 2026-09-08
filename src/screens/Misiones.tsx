@@ -26,9 +26,10 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
     setArtifactsOpen,
   } = useUi()
   const model = useUi((s) => s.model)
+  const agentMode = useUi((s) => s.agentMode)
+  const startAgent = useUi((s) => s.startAgent)
 
   const lastPayload = useRef<Record<string, unknown> | null>(null)
-  const mode = 'chat' as 'chat' | 'chain'
   const [ckpt, setCkpt] = useState<{ task_id: string; last: Record<string, unknown>; steps: number } | null>(null)
   useEffect(() => {
     api.checkpoints().then((r) => {
@@ -48,9 +49,13 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
     // Si la anterior sigue corriendo, force=true aborta el relevo y toma el
     // control (el workspace se hereda copiado, los ficheros persisten).
     const unfinished = Boolean(taskId) && !done
-    const payload = {
+    const payload: Record<string, unknown> = {
       model,
       ...p,
+      mode: (typeof p.mode === 'string' && p.mode) ? p.mode : (agentMode || 'chat'),
+      start_agent: (typeof p.start_agent === 'string' && p.start_agent)
+        ? p.start_agent
+        : (startAgent || (agentMode === 'chain' ? 'architect' : 'agent')),
       ...(taskId && !p.continue_task ? { continue_task: taskId } : {}),
       ...(unfinished && !p.continue_task ? { force: true } : {}),
     }
@@ -80,9 +85,16 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
   }
 
   const handleRetry = () => {
-    if (lastPayload.current && !streaming) {
-      void startMission(lastPayload.current)
-    }
+    if (streaming) return
+    const prev = lastPayload.current || {}
+    const tid = taskId || (typeof prev.continue_task === 'string' ? prev.continue_task : '')
+    void startMission({
+      ...prev,
+      task: String(prev.task || 'continuar desde el último checkpoint'),
+      continue_task: tid || undefined,
+      resume_checkpoint: tid || undefined,
+      force: true,
+    })
   }
 
   const memoryBlock = useMemo(() => {
@@ -165,8 +177,8 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
           <div className="flex-1 overflow-y-auto">
             <ChatHero
               model={model}
-              mode={mode}
-              onSelectPrompt={(text) => onLaunch({ task: text })}
+              mode={agentMode}
+              onSelectPrompt={(text) => onLaunch({ task: text, mode: agentMode, start_agent: startAgent })}
             />
           </div>
         ) : (
@@ -175,7 +187,7 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
             streaming={streaming}
             taskId={taskId}
             onRetry={handleRetry}
-            canRetry={Boolean(lastPayload.current)}
+            canRetry={Boolean(lastPayload.current || taskId)}
             hideLogs={hideLogs}
           />
         )}

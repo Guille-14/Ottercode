@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Box, CloudDownload, Trash2, Copy, Cpu } from 'lucide-react'
 import { api, type Pulse } from '../api'
 import { Badge, Card } from '../ui'
+import ConfirmDialog from '../ConfirmDialog'
+import UndoToast from '../UndoToast'
 
 function fmtBytes(n?: number): string {
   if (!n) return '—'
@@ -20,6 +22,9 @@ export default function Modelos() {
   const [pulling, setPulling] = useState(false)
   const [progress, setProgress] = useState<{ pct: number; status: string } | null>(null)
   const pullAbort = useRef<(() => void) | null>(null)
+  const [confirmName, setConfirmName] = useState<string | null>(null)
+  const [undoName, setUndoName] = useState<string | null>(null)
+  const undoRef = useRef<number | null>(null)
 
   const reload = async () => {
     try {
@@ -71,8 +76,9 @@ export default function Modelos() {
     setProgress(null)
   }
 
-  const doDelete = async (name: string) => {
-    if (!window.confirm(`¿Borrar el modelo ${name}?`)) return
+  const doDelete = (name: string) => setConfirmName(name)
+
+  const commitDelete = async (name: string) => {
     try {
       await api.deleteModel(name)
       await reload()
@@ -205,9 +211,10 @@ export default function Modelos() {
                       </Badge>
                     )}
                   </div>
-                  <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <div className="flex shrink-0 gap-1">
                     <button
                       type="button"
+                      aria-label={`Copiar modelo ${m}`}
                       onClick={() => void doCopy(m)}
                       className="rounded-md p-1.5 text-muted hover:bg-panel hover:text-ink"
                       title="Copiar modelo"
@@ -216,9 +223,10 @@ export default function Modelos() {
                     </button>
                     <button
                       type="button"
+                      aria-label={`Eliminar modelo ${m}`}
                       onClick={() => void doDelete(m)}
                       className="rounded-md p-1.5 text-muted hover:bg-panel hover:text-danger"
-                      title="Borrar modelo"
+                      title="Eliminar modelo"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -229,6 +237,33 @@ export default function Modelos() {
           </div>
         )}
       </Card>
+      <ConfirmDialog
+        open={Boolean(confirmName)}
+        itemLabel={confirmName || 'este modelo'}
+        onCancel={() => setConfirmName(null)}
+        onConfirm={() => {
+          const name = confirmName
+          setConfirmName(null)
+          if (!name) return
+          setModels((ms) => ms.filter((x) => x !== name))
+          setUndoName(name)
+          if (undoRef.current) window.clearTimeout(undoRef.current)
+          undoRef.current = window.setTimeout(() => {
+            void commitDelete(name)
+            setUndoName(null)
+          }, 8000)
+        }}
+      />
+      {undoName && (
+        <UndoToast
+          label={undoName}
+          onUndo={() => {
+            if (undoRef.current) window.clearTimeout(undoRef.current)
+            setUndoName(null)
+            void reload()
+          }}
+        />
+      )}
     </div>
   )
 }

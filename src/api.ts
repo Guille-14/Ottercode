@@ -358,6 +358,20 @@ export const api = {
     j<{ ok: boolean }>(
       fetchWithAuth(`${API_HISTORY}/${encodeURIComponent(taskId)}`, { method: 'DELETE' }),
     ),
+  historyRename: (taskId: string, name: string) =>
+    j<{ ok: boolean; id: string; name: string }>(
+      fetchWithAuth(`${API_HISTORY}/${encodeURIComponent(taskId)}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }),
+    ),
+  missionUndo: (taskId?: string) =>
+    j<{ ok: boolean }>(
+      fetchWithAuth(`/api/mission/undo${taskId ? `?task_id=${encodeURIComponent(taskId)}` : ''}`, {
+        method: 'POST',
+      }),
+    ),
   profiles: () => j<ProfileResponse>(fetchWithAuth(API_PROFILES)),
   activeProfile: () => j<ProfileActiveResponse>(fetchWithAuth(`${API_PROFILES}/active`)),
   setActiveProfile: (name: string) =>
@@ -426,6 +440,18 @@ export const api = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path }),
+      }),
+    ),
+  todos: (taskId?: string) =>
+    j<{ ok: boolean; task_id: string; todos: { content?: string; status?: string; evidence?: string }[] }>(
+      fetchWithAuth(`${BASE}/todos${taskId ? `?task_id=${encodeURIComponent(taskId)}` : ''}`),
+    ),
+  compactNow: (taskId?: string) =>
+    j<{ ok: boolean; summary?: string; still_over?: boolean }>(
+      fetchWithAuth(`${BASE}/compact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId || null }),
       }),
     ),
   mcp: () =>

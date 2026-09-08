@@ -40,7 +40,7 @@ function BoolField({ label, k, s, set, hint }: { label: string; k: string; s: S;
         type="checkbox"
         checked={Boolean(s[k])}
         onChange={(e) => set(k, e.target.checked)}
-        className="mt-0.5 h-4 w-4 accent-emerald-600"
+        className="mt-0.5 h-4 w-4 accent-accent"
       />
       <span>
         {label}
@@ -153,7 +153,7 @@ export default function OllamaConfig() {
       </div>
 
       {err && <Card className="p-3 text-sm text-danger">{err}</Card>}
-      {applied && <Card className="p-3 text-sm text-emerald-300">{applied}</Card>}
+      {applied && <Card className="p-3 text-sm text-accent">{applied}</Card>}
 
       <Card className="p-4">
         <h3 className="mb-3 text-sm font-semibold">Generación</h3>

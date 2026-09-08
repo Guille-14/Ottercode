@@ -38,9 +38,19 @@ interface UiState {
   maxRounds: number
   hacker: boolean
   yolo: boolean
+  agentMode: 'chat' | 'chain'
+  startAgent: string
   totalTokens: number
   tokensPerSec: number
+  liveModel: string
+  liveAgent: string
+  missionStartedAt: number | null
+  sessionTitles: Record<string, string>
+  settingsSection: string
+  notice: string
   setView: (v: string) => void
+  setSettingsSection: (s: string) => void
+  setNotice: (s: string) => void
 
   setModel: (m: string) => void
   setArtifactsOpen: (open: boolean) => void
@@ -48,6 +58,8 @@ interface UiState {
   setMaxRounds: (n: number) => void
   setHacker: (v: boolean) => void
   setYolo: (v: boolean) => void
+  setAgentMode: (m: 'chat' | 'chain') => void
+  setStartAgent: (id: string) => void
   enqueueMission: (text: string, payload: Record<string, unknown>) => void
   dequeueMission: (id: string) => void
   startMission: (payload: Record<string, unknown>) => Promise<void>
@@ -96,12 +108,41 @@ export const useUi = create<UiState>()(
       maxRounds: 8,
       hacker: false,
       yolo: false,
+      agentMode: 'chat',
+      startAgent: 'agent',
       totalTokens: 0,
       tokensPerSec: 0,
-      setView: (v) => set({ view: v }),
+      liveModel: '',
+      liveAgent: '',
+      missionStartedAt: null,
+      sessionTitles: {},
+      settingsSection: 'parametros',
+      notice: '',
+      setSettingsSection: (s) => set({ settingsSection: s }),
+      setNotice: (s) => set({ notice: s }),
+      setView: (v) => {
+        const map: Record<string, string> = {
+          modelos: 'modelos',
+          skills: 'skills',
+          config: 'permisos',
+          estado: 'telemetria',
+        }
+        if (map[v]) set({ view: 'ajustes', settingsSection: map[v] })
+        else set({ view: v })
+      },
       clearMission: () => {
         tokTimes = []
-        set({ mission: [], taskId: null, missionQueue: [], missionError: null, totalTokens: 0, tokensPerSec: 0 })
+        set({
+          mission: [],
+          taskId: null,
+          missionQueue: [],
+          missionError: null,
+          totalTokens: 0,
+          tokensPerSec: 0,
+          liveModel: '',
+          liveAgent: '',
+          missionStartedAt: null,
+        })
       },
       enqueueMission: (text, payload) => {
         const item: QueuedItem = {
@@ -121,6 +162,11 @@ export const useUi = create<UiState>()(
       setMaxRounds: (n) => set({ maxRounds: n }),
       setHacker: (v) => set({ hacker: v }),
       setYolo: (v) => set({ yolo: v }),
+      setAgentMode: (m) => set({
+        agentMode: m,
+        startAgent: m === 'chain' ? 'architect' : (get().startAgent === 'architect' ? 'agent' : get().startAgent || 'agent'),
+      }),
+      setStartAgent: (id) => set({ startAgent: id }),
       openStudio: (t) => set({ studio: t }),
       closeStudio: () => set({ studio: null }),
       toggleFocus: () => set((s) => ({ focus: !s.focus })),
@@ -164,10 +210,16 @@ export const useUi = create<UiState>()(
         } else {
           set({ mission: [], taskId: null, streaming: true, missionError: null })
         }
+        const st = get()
+        const body = {
+          ...payload,
+          mode: payload.mode ?? st.agentMode ?? 'chat',
+          start_agent: payload.start_agent ?? st.startAgent ?? (st.agentMode === 'chain' ? 'architect' : 'agent'),
+        }
         const res = await fetchWithAuth('/api/task', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(body),
           signal: controller.signal,
         })
         if (!res.ok || !res.body) {
@@ -196,6 +248,12 @@ export const useUi = create<UiState>()(
             if (ev.name === 'session_id') {
               const tid = ev.data['task_id'] as string | undefined
               if (tid) set({ taskId: tid })
+              const raw = String(payload.task ?? '')
+              if (tid && raw && !keepOngoing) {
+                const title = raw.replace(/\s+/g, ' ').trim().slice(0, 48)
+                set((s) => ({ sessionTitles: { ...s.sessionTitles, [tid]: title } }))
+                void api.historyRename(tid, title).catch(() => undefined)
+              }
               continue
             }
             if (ev.name === 'perm_request') {
@@ -205,6 +263,29 @@ export const useUi = create<UiState>()(
             if (ev.name === 'token') {
               pushTokenTime()
               tokAcc++
+            }
+            if (ev.name === 'agent_start') {
+              set({
+                liveAgent: String(ev.data.nombre ?? ev.data.agent ?? ''),
+                liveModel: String(ev.data.model ?? get().model),
+              })
+            }
+            if (ev.name === 'task_start') {
+              set({
+                missionStartedAt: Date.now(),
+                liveModel: String(ev.data.model ?? get().model),
+                liveAgent: String(ev.data.start_agent ?? get().startAgent),
+              })
+              const tid = get().taskId
+              const task = String(ev.data.task ?? '')
+              if (tid && task && !get().sessionTitles[tid]) {
+                const title = task.replace(/\s+/g, ' ').trim().slice(0, 48)
+                set((s) => ({ sessionTitles: { ...s.sessionTitles, [tid]: title } }))
+              }
+            }
+            if (ev.name === 'task_error') {
+              const d = String(ev.data.detail || ev.data.message || 'Error en la misión')
+              set({ missionError: d })
             }
             pending.push(ev)
           }
@@ -258,7 +339,14 @@ export const useUi = create<UiState>()(
     }),
     {
       name: 'otter-storage',
-      version: 2,
+      version: 3,
+      migrate: (persisted, version) => {
+        const p = (persisted || {}) as Record<string, unknown>
+        if (!p.agentMode) p.agentMode = 'chat'
+        if (!p.startAgent) p.startAgent = p.agentMode === 'chain' ? 'architect' : 'agent'
+        if (!p.sessionTitles) p.sessionTitles = {}
+        return p as typeof persisted
+      },
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         taskId: state.taskId,
@@ -269,6 +357,9 @@ export const useUi = create<UiState>()(
         loopMode: state.loopMode,
         maxRounds: state.maxRounds,
         hacker: state.hacker,
+        yolo: state.yolo,
+        agentMode: state.agentMode,
+        startAgent: state.startAgent,
       }),
     },
   ),
