@@ -104,7 +104,15 @@ export default function ArtifactsPanel() {
   const [copied, setCopied] = useState(false)
 
   const liveFiles = useMemo(() => F.deriveLiveFiles(mission), [mission])
-  const done = mission.some((e) => isDoneName(e.name))
+  const done = useMemo(() => {
+    if (streaming) return false
+    for (let i = mission.length - 1; i >= 0; i--) {
+      const n = mission[i].name
+      if (isDoneName(n)) return true
+      if (n === 'agent_start' || n === 'task_start') return false
+    }
+    return false
+  }, [mission, streaming])
 
   const refresh = useCallback(() => {
     if (!taskId) return
@@ -137,11 +145,12 @@ export default function ArtifactsPanel() {
   }, [taskId, refresh])
 
   useEffect(() => {
-    if (!taskId || done) return
+    if (!taskId) return
+    if (done && !streaming) return
     refresh()
-    const id = setInterval(refresh, 4000)
+    const id = setInterval(refresh, 2000)
     return () => clearInterval(id)
-  }, [taskId, done, refresh])
+  }, [taskId, done, streaming, refresh])
 
   // Sincronizar archivo seleccionado con la petición desde el chat (Studio target)
   useEffect(() => {
@@ -183,7 +192,7 @@ export default function ArtifactsPanel() {
     return () => {
       cancelled = true
     }
-  }, [taskId, selected])
+  }, [taskId, selected, liveFiles.length, streaming])
 
   // Ajustar la pestaña automáticamente al cambiar de archivo
   useEffect(() => {

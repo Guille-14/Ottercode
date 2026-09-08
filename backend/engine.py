@@ -1300,6 +1300,58 @@ def _rescue_code_from_text(run: OtterRun, agent_id: str, text: str) -> Iterator[
     return nombre  # type: ignore[return-value]
 
 
+def _code_blob_from_text(text: str) -> str:
+    """Saca el código de un dump de completación (fence o JS/HTML crudo)."""
+    t = _strip_think(text or "").strip()
+    if not t:
+        return ""
+    fences = list(_RESCUE_FENCE_RE.finditer(t))
+    if fences:
+        return fences[-1].group(2).strip()
+    m = _RESCUE_OPEN_RE.search(t)
+    if m and m.group(2).strip():
+        return m.group(2).strip()
+    if re.search(r"function\s+\w+|const\s+\w+\s*=|</\w+>|<div\b", t):
+        return t
+    return ""
+
+
+def _append_continuation(run: OtterRun, target: str, blob: str) -> bool:
+    """Pega el dump del modelo al archivo real (Studio), no solo al chat."""
+    blob = (blob or "").strip()
+    if len(blob) < 40:
+        return False
+    path = run.workdir / target
+    try:
+        prev = path.read_text(encoding="utf-8") if path.is_file() else ""
+    except OSError:
+        prev = ""
+    # Evita duplicar el mismo trozo
+    sample = blob[:180].strip()
+    if sample and sample in prev:
+        return False
+    piece = blob
+    if target.lower().endswith((".html", ".htm")):
+        low = blob.lstrip().lower()
+        if not low.startswith("<!doctype") and not low.startswith("<html"):
+            if re.search(r"function\s+|const\s+\w+\s*=", blob) and "<script" not in low:
+                piece = "\n<script>\n" + blob + "\n</script>\n"
+        merged = prev
+        if "</body>" in merged.lower():
+            idx = merged.lower().rfind("</body>")
+            merged = merged[:idx] + piece + "\n" + merged[idx:]
+        else:
+            merged = merged + "\n" + piece
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(merged, encoding="utf-8")
+    else:
+        res = run.executor.dispatch("append_file", {"filepath": target, "content": "\n" + piece})
+        if not res.get("ok"):
+            return False
+    run._files_ever_written = True
+    return True
+
+
 def _complete_rescued_file(run: OtterRun, target: str) -> Iterator[str]:
     """D2: completación por partes con preflight, backoff Ollama y stall×3."""
     _set_step(run, f"rescue_complete:{target}")
@@ -1341,10 +1393,23 @@ def _complete_rescued_file(run: OtterRun, target: str) -> Iterator[str]:
         except OSError:
             pass
         try:
-            yield from run_agent_turn(
+            dumped = yield from run_agent_turn(
                 run, run.start_agent, 1, corr_trunc,
                 flush=False, max_steps=12,
                 only_tools={"append_file", "read_file", "finalizar"})
+            blob = _code_blob_from_text(dumped or "")
+            if blob and _append_continuation(run, target, blob):
+                cid = str(uuid.uuid4())
+                yield sse(SseEvent.tool_call, {
+                    "id": cid, "agent": run.start_agent, "iteration": 1,
+                    "tool": "append_file", "args": {"filepath": target},
+                    "title": f"🛟 Completación aplicada a {target}",
+                })
+                yield sse(SseEvent.tool_result, {
+                    "id": cid, "tool": "append_file", "ok": True,
+                    "output": f"OK: continuación escrita en {target}",
+                    "ms": 0,
+                })
             return
         except AbortRequested:
             raise
