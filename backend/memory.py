@@ -91,12 +91,20 @@ def delete_memory_item(item_index: int) -> None:
         pass
 
 
+_PREF_RX = re.compile(
+    r"(?i)\b(prefiero|me gusta|usa |no uses |siempre |nunca )\b.{0,80}"
+)
+
+
 def harvest_memory(run: Any, agent_id: str = "", last_text: str = "") -> None:
-    """Tras una respuesta: extrae un dato duradero o no guarda nada."""
-    if os.environ.get("OTTERCODE_MEMORY_LLM", "1") == "0":
-        return
+    """Tras una respuesta: heurística; LLM solo si OTTERCODE_MEMORY_LLM=1."""
     user_bit = str(getattr(run, "task_text", "") or "")[:800]
     asst = (last_text or "")[:1200]
+    blob = f"{user_bit}\n{asst}"
+    for m in _PREF_RX.finditer(blob):
+        add_memory(m.group(0).strip(), agente_id=agent_id or None)
+    if os.environ.get("OTTERCODE_MEMORY_LLM", "0") != "1":
+        return
     if not user_bit.strip() and not asst.strip():
         return
     material = f"USUARIO: {user_bit}\nAGENTE: {asst}"

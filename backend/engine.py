@@ -47,7 +47,7 @@ from backend.prompts import _looks_like_tool_attempt, _prev_conversation_block, 
 from backend.ollama import ContextOverflow, _estimate_tokens, _ollama_ndjson_text, flush_vram, stream_llm  # noqa: E402
 from backend.history import TOOL_CAPABLE_MODELS, save_session  # noqa: E402
 from backend.db import save_session_to_db  # noqa: E402
-from backend.config import HACKER_SUFFIX, LLM_BACKEND, MAX_INJECTIONS, MAX_TOOL_STEPS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, native_tools_enabled  # noqa: E402
+from backend.config import FLUSH_EVERY_TURN, HACKER_SUFFIX, LLM_BACKEND, MAX_INJECTIONS, MAX_TOOL_STEPS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, native_tools_enabled  # noqa: E402
 from backend.agents import AGENT_ORDER, Agent, DYNAMIC_AGENTS, ULTRAREVIEW_SUFFIX, _CORE_BASE_PROMPTS, _agent_meta, _chat_base, get_agent, skill_enabled, tool_protocol  # noqa: E402
 from backend.agents import *  # noqa: F401,F403
 from backend.prompts import *  # noqa: F401,F403
@@ -166,6 +166,26 @@ def _log_uncaught(run: Any, exc: BaseException, step: Optional[str] = None) -> s
 
 class RescueStalled(RuntimeError):
     """Rescate/completación falló 3 veces sobre el mismo archivo."""
+
+_LAST_GPU_MODEL = ""
+
+
+def _should_flush_vram(run: Any, flush: bool) -> bool:
+    """Flush solo al cambiar de modelo, si FLUSH_EVERY_TURN=1, o si el caller no pide skip."""
+    global _LAST_GPU_MODEL
+    if not flush:
+        return False
+    if FLUSH_EVERY_TURN:
+        return True
+    model = getattr(run, "model", "") or ""
+    return (not _LAST_GPU_MODEL) or (_LAST_GPU_MODEL != model)
+
+
+def _mark_gpu_model(model: str) -> None:
+    global _LAST_GPU_MODEL
+    _LAST_GPU_MODEL = model or _LAST_GPU_MODEL
+
+
 
 
 import backend.config as _otter_cfg  # noqa: E402
@@ -505,12 +525,14 @@ def run_simple_agent(
                   agent_icon=meta.get("icon", ""), iteration=iteration,
                   last_tool=None, last_tool_ok=None)
     yield sse(SseEvent.agent_start, {"agent": agent_id, "iteration": iteration, **meta})
-    flush = flush_vram(run.model)  # ⚓ REGLA DE ORO
-    yield sse(SseEvent.vram_flush, {"agent": agent_id, "iteration": iteration, **flush})
-    if not flush["ok"]:
-        yield sse(SseEvent.system, {
-            "text": f"⚠️ VRAM flush no confirmado ({flush.get('error', flush.get('detail'))})"
-        })
+    if _should_flush_vram(run, True):
+        flush = flush_vram(run.model)
+        yield sse(SseEvent.vram_flush, {"agent": agent_id, "iteration": iteration, **flush})
+        if not flush["ok"]:
+            yield sse(SseEvent.system, {
+                "text": f"⚠️ VRAM flush no confirmado ({flush.get('error', flush.get('detail'))})"
+            })
+    _mark_gpu_model(run.model)
     _eval = _preflight_eval(run, system_prompt, prompt)
     yield sse(SseEvent.system, {
         "text": (f"🗜️ preflight ANTES de llamar al modelo: est={_eval['est']} tok · "
@@ -655,7 +677,7 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
     # FASE 3 · Si el perfil activo tiene system_override, usarlo como base
     profile_override = _otter_profiles._ACTIVE_PROFILE.get("system_override", "")
     if profile_override:
-        system_prompt = profile_override + "\n\n" + tool_protocol(allowed)
+        system_prompt = profile_override + "\n\n" + tool_protocol(allowed, native=_native_on)
     else:
         system_prompt = (
             base + tool_protocol(allowed, native=_native_on) if base else agent.system_prompt
@@ -695,9 +717,10 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
     # ⚓ REGLA DE ORO (v4.8): los turnos de CONTINUACIÓN del mismo agente
     # (correctivos/de completación) llaman con flush=False — el modelo YA está
     # cargado y recargarlo provocaba timeouts de 300 s tras un rescate.
-    if flush:
+    if _should_flush_vram(run, flush):
         flush_info = flush_vram(run.model)
         yield sse(SseEvent.vram_flush, {"agent": agent_id, "iteration": iteration, **flush_info})
+    _mark_gpu_model(run.model)
 
     # v3.4 · registro de skills usadas EN ESTE TURNO (para obligaciones:
     # developer sin archivos creados, researcher que finaliza sin explorar)

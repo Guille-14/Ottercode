@@ -64,7 +64,7 @@ def route(mensaje: str) -> Dict[str, str]:
     base = _heuristic(mensaje)
     if os.environ.get("OTTERCODE_ROUTER", "1") == "0":
         return base
-    if os.environ.get("OTTERCODE_ROUTER_LLM", "1") == "0":
+    if os.environ.get("OTTERCODE_ROUTER_LLM", "0") == "0":
         return base
     if LLM_BACKEND != "ollama":
         return base
@@ -101,6 +101,8 @@ def route(mensaje: str) -> Dict[str, str]:
 def preload_router() -> None:
     """Mantiene el modelo router residente (keep_alive -1). No bloquea arranque."""
     if os.environ.get("OTTERCODE_ROUTER", "1") == "0":
+        return
+    if os.environ.get("OTTERCODE_ROUTER_LLM", "0") == "0":
         return
     if LLM_BACKEND != "ollama":
         return

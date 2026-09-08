@@ -348,7 +348,7 @@ def memory_note_for_run(run: Any, status: str) -> Optional[str]:
                      f"{primera_linea} · [[Misiones/{run.task_id}|detalle]]\n")
 
         # v4.0 · PERFIL_Usuario.md: lo que la balsa ha aprendido de TI
-        if os.environ.get("OTTERCODE_MEMORY_LLM", "1") != "0":
+        if os.environ.get("OTTERCODE_MEMORY_LLM", "0") == "1":
             insights = _extract_user_insights(run)
             if insights:
                 perfil_u = base / "Perfil_Usuario.md"
