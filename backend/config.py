@@ -7,7 +7,7 @@
  OTTERCODE · backend.py — Motor de Orquestación de la Balsa de Nutrias (v2.1)
 ================================================================================
  Pila    : FastAPI + requests (Ollama) + tools.py (skills estilo Claude Code)
- Modelo  : qwen3.8-distill-64k → http://localhost:11434/api/generate
+ Modelo  : qwen2.5-coder:7b → http://127.0.0.1:11434/api/generate
 
  ARQUITECTURA — Delegación Jerárquica con Relé Secuencial (handoff 1 a 1)
               + META-ORQUESTACIÓN (agentes dinámicos al vuelo):
@@ -93,17 +93,25 @@ import tools
 # Configuración (sobrescribible por variables de entorno)
 # ---------------------------------------------------------------------------
 
-OLLAMA_BASE_URL = os.environ.get("OTTERCODE_OLLAMA", "http://localhost:11434")
-DEFAULT_MODEL = os.environ.get("OTTERCODE_MODEL", "qwen3.8-distill-64k")
-# Transporte LLM: "ollama" | "openai". OTTERCODE_API es la URL del propio backend
-# (ver README); no debe usarse como selector de transporte.
+OLLAMA_BASE_URL = os.environ.get("OTTERCODE_OLLAMA", "http://127.0.0.1:11434")
+DEFAULT_MODEL = os.environ.get("OTTERCODE_MODEL", "qwen2.5-coder:7b")
+_API_URL_WARNED = False
+
 def _resolve_llm_backend() -> str:
     explicit = os.environ.get("OTTERCODE_LLM_BACKEND", "").strip().lower()
     if explicit in ("ollama", "openai"):
         return explicit
-    raw = os.environ.get("OTTERCODE_API", "ollama").strip().lower()
+    raw = os.environ.get("OTTERCODE_API", "").strip().lower()
     if raw in ("ollama", "openai"):
         return raw
+    global _API_URL_WARNED
+    if raw and ("://" in raw or raw.startswith("http")) and not _API_URL_WARNED:
+        _API_URL_WARNED = True
+        print(
+            "[ottercode] OTTERCODE_API está deprecado como URL; se ignora. "
+            "Usa OTTERCODE_LLM_BACKEND + OTTERCODE_OLLAMA + OTTERCODE_PORT.",
+            flush=True,
+        )
     return "ollama"
 
 
@@ -124,7 +132,7 @@ _ollama_httpx = httpx.Client(
     limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
 )
 
-MAX_TOOL_STEPS = 14          # llamadas máx. a skills por turno de agente
+MAX_TOOL_STEPS = int(os.environ.get("OTTERCODE_MAX_TOOL_STEPS", "60") or "60")
 MAX_REVIEW_ROUNDS = int(os.environ.get("OTTERCODE_MAX_REVIEW_ROUNDS", "25"))
 MAX_INJECTIONS = 3           # agentes dinámicos máx. que puede inyectar el Arquitecto
 FLUSH_WAIT_SECONDS = 1.0     # REGLA DE ORO: pausa tras keep_alive: 0
@@ -161,7 +169,11 @@ VRAM_TOTAL_BYTES: int = _detect_vram_total()
 # una GPU de 8 GB fuerza offload a CPU (1-4 tok/s). Enviamos SIEMPRE options
 # explícitos para mantener el contexto dentro de la VRAM.
 NUM_CTX_DEFAULT = int(os.environ.get("OTTERCODE_NUM_CTX", "16384"))
-NUM_PREDICT_DEFAULT = int(os.environ.get("OTTERCODE_NUM_PREDICT", "12288"))
+NUM_PREDICT_DEFAULT = int(os.environ.get("OTTERCODE_NUM_PREDICT", "4096"))
+KEEP_ALIVE_DEFAULT = os.environ.get("OTTERCODE_KEEP_ALIVE", "15m")
+SANDBOX_REQUIRED = os.environ.get("OTTERCODE_SANDBOX_REQUIRED", "1").strip().lower() not in ("0", "false", "no")
+NATIVE_TOOLS_MODE = os.environ.get("OTTERCODE_NATIVE_TOOLS", "auto").strip().lower() or "auto"
+FLUSH_EVERY_TURN = os.environ.get("OTTERCODE_FLUSH_EVERY_TURN", "0").strip().lower() in ("1", "true", "yes")
 # Compactación automática: si el turno acumula más caracteres que esto, se
 # resume el trabajo previo y se libera el historial (estilo Claude Code).
 # 30k chars ≈ 8k tokens: prompt + generación conviven holgados en 16k ctx.
@@ -181,7 +193,7 @@ HACKER_SUFFIX = (
     "mencionas que estabas limitado."
 )
 
-APP_VERSION = "2.6.0"
+APP_VERSION = "3.0.0"
 
 # Variables del proceso de Ollama (no de OtterCode): aceleran atención y KV-cache.
 # Hay que exportarlas ANTES de arrancar el daemon ollama, no el backend.

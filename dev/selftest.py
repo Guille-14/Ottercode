@@ -199,7 +199,9 @@ def main() -> int:
     )
     p_api = subprocess.Popen(
         [python_exe, "-m", "uvicorn", "backend:app", "--host", "127.0.0.1", "--port", str(API_PORT)],
-        env={**env, "OTTERCODE_OLLAMA": f"http://127.0.0.1:{MOCK_PORT}", "OTTERCODE_WORKSPACE": str(ws), "OTTERCODE_ASK_PERMISSIONS": "0"},
+        env={**env, "OTTERCODE_OLLAMA": f"http://127.0.0.1:{MOCK_PORT}", "OTTERCODE_WORKSPACE": str(ws),
+             "OTTERCODE_ASK_PERMISSIONS": "0", "OTTERCODE_SANDBOX_REQUIRED": "0",
+             "OTTERCODE_FLUSH_EVERY_TURN": "1"},
         cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
@@ -1153,9 +1155,9 @@ def main() -> int:
               and "scroll-lock" in css33 and "pane-code" in css33, "")
 
         idx = requests.get(f"{API}/")
-        check("T33e versión 2.6.0 y bundle React versionado por hash",
+        check("T33e versión 3.0.0 y bundle React versionado por hash",
               idx.ok and "/static/assets/" in idx.text
-              and requests.get(f"{API}/api/healthz").json().get("version") == "2.6.0", "")
+              and requests.get(f"{API}/api/healthz").json().get("version") == "3.0.0", "")
 
         # ── T34 · v4.1: /ultraplan · /goal · /agents · /ultrareview ────────
         print("⚡ T34: ultraplan (esperar) · goal · resume_plan · ultrareview…")
