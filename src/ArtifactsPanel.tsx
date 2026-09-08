@@ -259,7 +259,7 @@ export default function ArtifactsPanel() {
     : 'flex flex-1 min-w-0 h-full flex-col border-l border-line bg-canvas'
 
   return (
-    <aside className={asideClass} aria-label="Artefactos">
+    <section className={asideClass} aria-label="Artefactos">
       {/* Cabecera Principal */}
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-panel px-4">
         <div className="flex items-center gap-2">
@@ -422,6 +422,6 @@ export default function ArtifactsPanel() {
           <CodeViewer code={raw || '…'} />
         )}
       </div>
-    </aside>
+    </section>
   )
 }

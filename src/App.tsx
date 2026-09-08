@@ -98,6 +98,13 @@ export default function App() {
         e.preventDefault()
         setPalette((v) => !v)
       }
+      if (e.key === 'Escape') {
+        const st = useUi.getState()
+        if (st.studio || st.artifactsOpen) {
+          e.preventDefault()
+          st.closeStudio()
+        }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -423,7 +430,11 @@ export default function App() {
       </div>
 
       {/* Overlays / Modales */}
-      {studio && view !== 'misiones' && <Studio />}
+      {studio && view !== 'misiones' && (
+        <div className="fixed inset-0 z-[80]">
+          <Studio />
+        </div>
+      )}
       <HwMonitor open={hwOpen} onClose={() => setHwOpen(false)} />
       {!hwOpen && (
         <button

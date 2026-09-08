@@ -299,7 +299,7 @@ select option {
   outline-offset: 3px;
 }
 
-.focus-mode aside {
+.focus-mode aside[aria-label="Barra lateral"] {
   display: none;
 }
 

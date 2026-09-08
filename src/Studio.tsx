@@ -222,7 +222,7 @@ export default function Studio() {
           </a>
           <Button variant="ghost" onClick={closeStudio} className="h-8 rounded-lg">
             <X className="h-4 w-4 mr-1.5" />
-            <span>Cerrar Studio</span>
+            <span>Cerrar</span>
           </Button>
         </div>
       </header>

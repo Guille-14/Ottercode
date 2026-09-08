@@ -23,6 +23,7 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
     pendingPerm,
     approvePerm,
     artifactsOpen,
+    artifactsUserClosed,
     setArtifactsOpen,
   } = useUi()
   const model = useUi((s) => s.model)
@@ -36,10 +37,6 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
       setCkpt(r.unfinished?.[0] ?? null)
     }).catch(() => undefined)
   }, [taskId, streaming])
-
-  // El panel se abre solo con el primer archivo creado, salvo que el usuario
-  // lo haya cerrado manualmente durante esta misión.
-  const closedThisMission = useRef(false)
 
   const done = mission.some((e) => isDoneName(e.name))
 
@@ -60,28 +57,23 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
       ...(unfinished && !p.continue_task ? { force: true } : {}),
     }
     lastPayload.current = payload
-    closedThisMission.current = false
     void startMission(payload)
   }
 
   useEffect(() => {
-    if (!artifactsOpen && !closedThisMission.current) {
-      // Detectar si el LLM empieza a escupir bloques de código ejecutable
-      const detectCodeBlock = mission.some((e) => {
-        if (e.name === 'token' && typeof e.data.token === 'string') {
-          return e.data.token.includes('```html') || e.data.token.includes('```svg') || e.data.token.includes('<!DOCTYPE html')
-        }
-        return false
-      })
-      if (detectCodeBlock) {
-        setArtifactsOpen(true)
+    // Nunca reabrir si el usuario lo cerró (el stream de tokens lo reabría).
+    if (artifactsOpen || artifactsUserClosed) return
+    const detectCodeBlock = mission.some((e) => {
+      if (e.name === 'token' && typeof e.data.token === 'string') {
+        return e.data.token.includes('```html') || e.data.token.includes('```svg') || e.data.token.includes('<!DOCTYPE html')
       }
-    }
-  }, [mission, artifactsOpen, setArtifactsOpen])
+      return false
+    })
+    if (detectCodeBlock) setArtifactsOpen(true)
+  }, [mission, artifactsOpen, artifactsUserClosed, setArtifactsOpen])
 
   const handleClear = () => {
     clearMission()
-    closedThisMission.current = false
   }
 
   const handleRetry = () => {

@@ -34,6 +34,7 @@ interface UiState {
   composerDraft: string
   model: string
   artifactsOpen: boolean
+  artifactsUserClosed: boolean
   loopMode: boolean
   maxRounds: number
   hacker: boolean
@@ -104,6 +105,7 @@ export const useUi = create<UiState>()(
       composerDraft: '',
       model: 'qwen3.5:4b',
       artifactsOpen: true,
+      artifactsUserClosed: false,
       loopMode: false,
       maxRounds: 8,
       hacker: false,
@@ -157,7 +159,7 @@ export const useUi = create<UiState>()(
       },
 
       setModel: (m) => set({ model: m }),
-      setArtifactsOpen: (open) => set({ artifactsOpen: open }),
+      setArtifactsOpen: (open) => set({ artifactsOpen: open, artifactsUserClosed: !open }),
       setLoopMode: (v) => set({ loopMode: v }),
       setMaxRounds: (n) => set({ maxRounds: n }),
       setHacker: (v) => set({ hacker: v }),
@@ -170,9 +172,9 @@ export const useUi = create<UiState>()(
       openStudio: (t) => {
         const path = typeof t.path === 'string' ? t.path.trim() : ''
         if (!path || path === '[object Object]') return
-        set({ studio: { taskId: t.taskId, path } })
+        set({ studio: { taskId: t.taskId, path }, artifactsOpen: true, artifactsUserClosed: false })
       },
-      closeStudio: () => set({ studio: null }),
+      closeStudio: () => set({ studio: null, artifactsOpen: false, artifactsUserClosed: true }),
       toggleFocus: () => set((s) => ({ focus: !s.focus })),
       setComposerDraft: (d) => set({ composerDraft: d }),
       clearComposerDraft: () => set({ composerDraft: '' }),
