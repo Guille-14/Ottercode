@@ -1100,6 +1100,10 @@ def _code_candidates(text: str) -> List[Tuple[str, str, bool]]:
                        sin_cerrar, re.IGNORECASE)
         if m2 and len(m2.group(0).strip()) >= 200:
             out.append(("html", m2.group(0), True))
+        elif (re.search(r"<(div|h[1-6]|section|article|p)\s+class=", sin_cerrar, re.I)
+              and sin_cerrar.count("<") >= 8 and len(sin_cerrar.strip()) >= 200):
+            # Fragmento Tailwind/HTML pegado en el chat (sin <html>)
+            out.append(("html", sin_cerrar.strip(), True))
     return out
 
 

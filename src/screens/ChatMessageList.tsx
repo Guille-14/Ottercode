@@ -361,11 +361,15 @@ const SegBubble = memo(function SegBubble({
         )}
 
         {/* Texto en Markdown en vivo */}
-        {text && (
+        {text && F.looksLikeHtmlDump(text) ? (
+          <pre className="oc-mono max-h-72 overflow-auto rounded-xl border border-line bg-codebg p-3 text-[11px] text-muted whitespace-pre-wrap">
+            {text}
+          </pre>
+        ) : text ? (
           <div className="oc-md text-sm leading-relaxed text-ink">
             <Markdown>{text}</Markdown>
           </div>
-        )}
+        ) : null}
 
         {/* Acciones por burbuja */}
         {text && !streaming && seg.final && (
@@ -467,20 +471,24 @@ export default function ChatMessageList({
             <FileCode className="h-4 w-4" /> Archivos generados
           </p>
           <div className="space-y-1">
-            {files.map((f) => (
-              <div key={String(f)} className="artifact-card flex items-center justify-between text-xs">
-                <span className="oc-mono">{String(f)}</span>
+            {files.map((f, i) => {
+              const path = F.filePathOf(f)
+              if (!path) return null
+              return (
+              <div key={path || i} className="artifact-card flex items-center justify-between text-xs">
+                <span className="oc-mono">{path}</span>
                 {taskId && (
                   <button
                     type="button"
                     className="font-medium text-ink hover:underline"
-                    onClick={() => F.studioFile(taskId, String(f))}
+                    onClick={() => F.studioFile(taskId, path)}
                   >
                     abrir →
                   </button>
                 )}
               </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}

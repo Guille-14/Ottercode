@@ -25,6 +25,11 @@ function flattenTree(nodes: unknown): FlatFile[] {
     for (const n of list) {
       if (!n || typeof n !== 'object') continue
       const node = n as { name?: unknown; type?: unknown; size?: unknown; children?: unknown }
+      const direct = typeof node.path === 'string' ? node.path : ''
+      if (direct && node.type !== 'dir') {
+        out.push({ path: direct, size: typeof node.size === 'number' ? node.size : undefined })
+        continue
+      }
       const name = typeof node.name === 'string' ? node.name : ''
       if (!name) continue
       const path = [...base, name].join('/')

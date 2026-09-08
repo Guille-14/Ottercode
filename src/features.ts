@@ -172,6 +172,23 @@ export interface StudioTarget {
   path: string
 }
 
+export function filePathOf(f: unknown): string {
+  if (typeof f === 'string') return f.trim()
+  if (f && typeof f === 'object') {
+    const o = f as Record<string, unknown>
+    if (typeof o.path === 'string' && o.path.trim()) return o.path.trim()
+    if (typeof o.name === 'string' && o.name.trim()) return o.name.trim()
+  }
+  return ''
+}
+
+export function looksLikeHtmlDump(text: string): boolean {
+  const t = (text || '').trim()
+  if (t.length < 80) return false
+  const tags = (t.match(/<\/?[a-z][\w:-]*/gi) || []).length
+  return tags >= 6 && /<(div|h[1-6]|p|section|html|body)\b/i.test(t)
+}
+
 export function studioFile(taskId: string, path: string): void {
   useUi.getState().openStudio({ taskId, path })
 }
@@ -195,8 +212,8 @@ export function deriveLiveFiles(mission: MissionEvent[]): string[] {
       const files = e.data['files']
       if (Array.isArray(files)) {
         for (const f of files) {
-          const s = String(f)
-          if (s && !seen.has(s)) {
+          const s = filePathOf(f)
+          if (s && !seen.has(s) && s !== '[object Object]') {
             seen.add(s)
             out.push(normPath(s))
           }
@@ -239,5 +256,7 @@ export const F = {
   studioFile,
   hardenSrcdoc,
   deriveLiveFiles,
+  filePathOf,
+  looksLikeHtmlDump,
   normPath,
 }
