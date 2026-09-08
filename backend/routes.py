@@ -795,6 +795,7 @@ class TaskRequest(BaseModel):
     max_rounds: Optional[int] = Field(default=None, ge=1, le=25)
     skill: Optional[str] = Field(default=None, max_length=64)
     resume_checkpoint: Optional[str] = Field(default=None, max_length=80)
+    project_root: Optional[str] = Field(default=None, max_length=500)
 
 
 @router.post(Route.TASK)
@@ -881,8 +882,15 @@ def api_task(req: TaskRequest) -> StreamingResponse:
     task_id = adopted_task_id or (
         datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     )
-    workdir = WORKSPACE_ROOT / task_id
+    from backend.project import resolve_workdir
+    from backend.workspace_git import ensure_mission_git, maybe_auto_rag
+    workdir = resolve_workdir(task_id, req.project_root)
     workdir.mkdir(parents=True, exist_ok=True)
+    try:
+        ensure_mission_git(workdir, task_id)
+    except Exception:
+        pass
+    maybe_auto_rag(workdir)
 
     run = OtterRun(
         task_id, req.task.strip(),
@@ -1190,6 +1198,11 @@ def api_workspace(task_id: Optional[str] = None) -> Dict[str, Any]:
     if not tree:
         raise HTTPException(status_code=500, detail="Workspace ilegible.")
     from backend.hooks import load_file_hooks
+    try:
+        from backend.workspace_git import maybe_auto_rag
+        maybe_auto_rag(workdir)
+    except Exception:
+        pass
     return {
         "ok": True,
         "task_id": tid,
@@ -1419,6 +1432,53 @@ def api_skills_enable(req: SkillEnableRequest) -> Dict[str, Any]:
 class ApproveRequest(BaseModel):
     id: str
     allow: bool
+
+@router.get(Route.PROJECT)
+def api_project_get() -> Dict[str, Any]:
+    from backend.project import load_project
+    return load_project()
+
+
+class ProjectRequest(BaseModel):
+    path: str = ""
+
+
+@router.post(Route.PROJECT)
+def api_project_set(req: ProjectRequest) -> Dict[str, Any]:
+    from backend.project import save_project
+    try:
+        return save_project(req.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get(Route.MCP)
+def api_mcp() -> Dict[str, Any]:
+    try:
+        import mcp_client
+        mgr = mcp_client.get_mcp_manager()
+        ready = False
+        try:
+            ready = bool(mcp_client.mcp_loop.is_ready())
+        except Exception:
+            ready = bool(mgr.is_available)
+        servers = []
+        for name, sess in (mgr.sessions or {}).items():
+            conn = (mgr._connections or {}).get(name)
+            servers.append({
+                "name": name,
+                "connected": bool(conn and conn.connected),
+                "tools": list(conn.tools) if conn else [],
+            })
+        return {
+            "ok": True,
+            "ready": ready,
+            "servers": servers,
+            "tools": list(mgr.tools_catalog.keys()),
+        }
+    except Exception as exc:
+        return {"ok": False, "ready": False, "servers": [], "tools": [], "error": str(exc)}
+
 
 @router.post("/api/approve")
 def api_approve(req: ApproveRequest):

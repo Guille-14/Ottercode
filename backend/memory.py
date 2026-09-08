@@ -41,10 +41,18 @@ def get_memory() -> str:
         conn.close()
     except Exception:
         return ""
-    if not rows:
-        return ""
-    lines = [f"- {c} ({ts})" for c, ts in rows]
-    return "\n".join(reversed(lines))
+    sqlite_txt = ""
+    if rows:
+        lines = [f"- {c} ({ts})" for c, ts in rows]
+        sqlite_txt = "\n".join(reversed(lines))
+    vault_txt = ""
+    try:
+        from backend.vault import _memory_recall
+        vault_txt = (_memory_recall("preferencias usuario perfil") or "").strip()[:800]
+    except Exception:
+        vault_txt = ""
+    parts = [p for p in (sqlite_txt, vault_txt) if p]
+    return "\n\n".join(parts)
 
 
 def add_memory(memory_item: str, agente_id: Optional[str] = None) -> None:

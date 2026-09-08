@@ -52,6 +52,12 @@ export default function ChatHero({
         OtterCode orquesta modelos locales en Ollama con herramientas de sistema,
         ficheros y ejecución en sandbox.
       </p>
+      <ol className="mt-4 max-w-md space-y-1 text-left text-xs text-muted">
+        <li>1. Elige un modelo en Ollama (o pulsa las tarjetas de abajo).</li>
+        <li>2. En Ajustes puedes fijar la carpeta de tu repo.</li>
+        <li>3. YOLO en la barra desactiva permisos de escritura.</li>
+        <li>4. /ultraplan para planificar; Ejecutar cuando apruebes.</li>
+      </ol>
 
       <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-3 py-1 text-xs text-muted">
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />

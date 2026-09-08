@@ -67,6 +67,8 @@ class Route:
     SKILLS_ENABLE = "/api/skills/enable"
     AUTH_TOKEN = "/api/auth/token"
     CHECKPOINTS = "/api/checkpoints"
+    PROJECT = "/api/project"
+    MCP = "/api/mcp"
 
 
 class SseEvent(Enum):

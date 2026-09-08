@@ -165,16 +165,80 @@ function ProfilesPane() {
   )
 }
 
+function ProjectPane() {
+  const [path, setPath] = useState('')
+  const [msg, setMsg] = useState('')
+  useEffect(() => {
+    api.project().then((r) => setPath(r.path || '')).catch(() => undefined)
+  }, [])
+  const save = async () => {
+    try {
+      const r = await api.setProject(path)
+      setPath(r.path)
+      setMsg(r.path ? `Proyecto: ${r.path}` : 'Usando workspace por misión')
+    } catch (e) {
+      setMsg(String(e))
+    }
+  }
+  return (
+    <Card className="p-4">
+      <h3 className="mb-3 text-sm font-semibold">Carpeta del proyecto</h3>
+      <p className="mb-2 text-xs text-muted">
+        Si la indicas, Otter trabaja ahí en lugar de workspace/&lt;misión&gt;. Vacío = sandbox por tarea.
+      </p>
+      <input
+        className="mb-2 w-full rounded-md border border-line bg-canvas px-2 py-1 text-sm text-ink"
+        value={path}
+        onChange={(e) => setPath(e.target.value)}
+        placeholder="/home/tú/mi-repo"
+      />
+      <button type="button" onClick={() => void save()} className="rounded-md bg-accent px-3 py-1 text-xs text-accentink">
+        Guardar
+      </button>
+      {msg ? <p className="mt-2 text-xs text-muted">{msg}</p> : null}
+    </Card>
+  )
+}
+
+function McpPane() {
+  const [data, setData] = useState<{ ready?: boolean; servers?: { name: string; connected: boolean; tools: string[] }[] }>({})
+  useEffect(() => {
+    api.mcp().then(setData).catch(() => undefined)
+  }, [])
+  return (
+    <Card className="p-4">
+      <h3 className="mb-3 text-sm font-semibold">MCP</h3>
+      <p className="mb-2 text-xs text-muted">
+        Servidores en mcp_servers.json · {data.ready ? 'listo' : 'sin herramientas cargadas'}
+      </p>
+      {(data.servers || []).length === 0 ? (
+        <p className="text-sm text-muted">Ningún servidor configurado.</p>
+      ) : (
+        <ul className="space-y-1 text-sm">
+          {(data.servers || []).map((s) => (
+            <li key={s.name} className="flex justify-between">
+              <span>{s.name}</span>
+              <Badge>{s.connected ? `${s.tools.length} tools` : 'offline'}</Badge>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
 export default function Configuracion() {
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-semibold">Configuración</h2>
-        <p className="text-sm text-muted">skills y perfiles de agente</p>
+        <p className="text-sm text-muted">skills, perfiles, carpeta y MCP</p>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <SkillsPane />
         <ProfilesPane />
+        <ProjectPane />
+        <McpPane />
       </div>
     </div>
   )

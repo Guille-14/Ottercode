@@ -419,4 +419,17 @@ export const api = {
         body: JSON.stringify({ task_id: taskId, path, content }),
       }),
     ),
+  project: () => j<{ path: string; ok: boolean }>(fetchWithAuth(`${BASE}/project`)),
+  setProject: (path: string) =>
+    j<{ ok: boolean; path: string }>(
+      fetchWithAuth(`${BASE}/project`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      }),
+    ),
+  mcp: () =>
+    j<{ ok: boolean; ready: boolean; servers: { name: string; connected: boolean; tools: string[] }[]; tools: string[] }>(
+      fetchWithAuth(`${BASE}/mcp`),
+    ),
 }

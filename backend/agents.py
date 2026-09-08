@@ -251,14 +251,12 @@ CORE_AGENTS: Dict[str, Agent] = {
         id="researcher", nombre="El Investigador", rol="Contexto · Web · Solo lectura",
         system_prompt=BASE_RESEARCHER + tool_protocol([
             "read_file", "list_dir", "tree", "web_search", "web_fetch",
-            "wikipedia_search", "arxiv_search", "github_search", "stack_search",
-            "weather", "http_request", "model_list", "vault_search",
-            "memory_recall", "finalizar"]),
+            "wikipedia_search", "http_request", "vault_search",
+            "memory_recall", "semantic_search", "finalizar"]),
         icon="🔬", color_neon="#8b9cf7",
         tools_disponibles=["read_file", "list_dir", "tree", "web_search", "web_fetch",
-                           "wikipedia_search", "arxiv_search", "github_search",
-                           "stack_search", "weather", "http_request", "model_list",
-                           "vault_search", "memory_recall", "finalizar"],
+                           "wikipedia_search", "http_request",
+                           "vault_search", "memory_recall", "semantic_search", "finalizar"],
         readonly=True,
     ),
     "developer": Agent(
