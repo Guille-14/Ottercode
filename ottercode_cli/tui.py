@@ -133,11 +133,20 @@ if HAS_TEXTUAL:
 
         def compose(self) -> ComposeResult:
             from ottercode_cli.core_bridge import cockpit
+            try:
+                st = _status_markup(cockpit(self.state))
+            except Exception as exc:
+                st = f"estado: {exc}"
+            wd = str(self.state.workdir)
+            try:
+                Path(wd).mkdir(parents=True, exist_ok=True)
+            except Exception:
+                wd = "."
             yield Header(show_clock=True)
             with Horizontal():
                 with Vertical(id="col-files"):
                     yield Static("ARCHIVOS", classes="panel-title")
-                    yield WorkspaceTree(str(self.state.workdir), id="tree")
+                    yield WorkspaceTree(wd, id="tree")
                 with Vertical(id="col-agent"):
                     yield Static("AGENTE", classes="panel-title")
                     yield Log(id="chat", highlight=False, max_lines=400)
@@ -146,7 +155,7 @@ if HAS_TEXTUAL:
                         yield Input(placeholder="Escribe una instrucción o /help", id="in")
                 with Vertical(id="col-side"):
                     yield Static("ESTADO", classes="panel-title")
-                    yield Static(_status_markup(cockpit(self.state)), id="status", markup=True)
+                    yield Static(st, id="status", markup=True)
                     yield Static("TOOLS / SALIDA / DIFF", classes="panel-title")
                     yield VerticalScroll(Static("Listo.", id="diff", markup=False))
             yield Footer()
@@ -216,7 +225,8 @@ if HAS_TEXTUAL:
             inp.focus()
 
         def action_help(self) -> None:
-            self._chat().write_line(SLASH_HELP)
+            for line in SLASH_HELP.splitlines():
+                self._chat().write_line(line)
             self.action_focus_prompt()
 
         def action_show_diff(self) -> None:
@@ -264,8 +274,16 @@ if HAS_TEXTUAL:
             self._dispatch(line)
 
         def _push_text(self, chunk: str) -> None:
-            if chunk:
-                self._chat().write(chunk)
+            if not chunk:
+                return
+            log = self._chat()
+            try:
+                log.write(chunk)
+            except Exception:
+                try:
+                    log.write_line(chunk.replace("\r", "")[:2000])
+                except Exception:
+                    pass
 
         def _dispatch(self, line: str) -> None:
             from ottercode_cli.commands import handle_slash
@@ -281,8 +299,13 @@ if HAS_TEXTUAL:
                     self._chat().write_line("OtterCode Neo TUI")
                     return
                 buf: list[str] = []
-                handle_slash(self.state, sl, buf.append)
-                self._chat().write_line("\n".join(buf) or f"/{sl.name}")
+                try:
+                    handle_slash(self.state, sl, buf.append)
+                except Exception as exc:
+                    buf.append(str(exc))
+                text = "\n".join(buf) or f"/{sl.name}"
+                for line in text.splitlines() or [text]:
+                    self._chat().write_line(line[:2000])
                 if sl.name in ("diff", "apply", "reject"):
                     self.action_show_diff()
                 self._refresh_status()
@@ -296,16 +319,21 @@ if HAS_TEXTUAL:
             self._run_agent(line)
 
         def _on_ev(self, name: str, data: dict) -> None:
-            if name == "tool_call":
-                self.query_one("#diff", Static).update(f"tool {data.get('tool')}")
-            elif name == "tool_result":
-                ok = "ok" if data.get("ok") else "err"
-                out = str(data.get("output") or "")[:800]
-                self.query_one("#diff", Static).update(f"[{ok}]\n{out}")
-            elif name == "diff":
-                self.state.pending_diff = str(data.get("diff") or "")
-                self.query_one("#diff", Static).update(self.state.pending_diff[:8000] or "(sin diff)")
-            elif name == "file_updated":
+            try:
+                if name == "tool_call":
+                    self.query_one("#diff", Static).update(f"tool {data.get('tool')}")
+                elif name == "tool_result":
+                    ok = "ok" if data.get("ok") else "err"
+                    out = str(data.get("output") or "")[:800]
+                    self.query_one("#diff", Static).update(f"[{ok}]\n{out}")
+                elif name == "diff":
+                    self.state.pending_diff = str(data.get("diff") or "")
+                    self.query_one("#diff", Static).update(self.state.pending_diff[:8000] or "(sin diff)")
+                elif name in ("system", "permission_requested", "perm_request"):
+                    t = str(data.get("text") or data.get("tool") or "")
+                    if t:
+                        self._chat().write_line(t[:500])
+            except Exception:
                 pass
 
         def _agent_done(self, err: str) -> None:

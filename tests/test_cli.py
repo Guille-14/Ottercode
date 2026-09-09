@@ -42,6 +42,12 @@ def test_session_roundtrip(tmp_path, monkeypatch):
     assert any(r["id"] == "abc" for r in rows)
 
 
+def test_friendly_error_abort():
+    from ottercode_cli.core_bridge import friendly_error
+    from backend.runstate import AbortRequested
+    assert "abort" in friendly_error(AbortRequested()).lower()
+
+
 def test_abort_run_noop():
     from ottercode_cli.core_bridge import CliState, abort_run
     from pathlib import Path

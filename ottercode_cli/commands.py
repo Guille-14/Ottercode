@@ -13,6 +13,14 @@ PrintFn = Callable[[str], None]
 
 def handle_slash(state: CliState, cmd: SlashCmd, printer: PrintFn) -> bool:
     """True si el comando consume el turno (no enviar al LLM)."""
+    try:
+        return _handle_slash(state, cmd, printer)
+    except Exception as exc:
+        printer(f"error /{cmd.name}: {exc}")
+        return True
+
+
+def _handle_slash(state: CliState, cmd: SlashCmd, printer: PrintFn) -> bool:
     n, a = cmd.name, cmd.arg
     if n == "help":
         printer(SLASH_HELP)

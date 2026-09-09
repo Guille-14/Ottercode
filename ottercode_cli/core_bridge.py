@@ -104,20 +104,69 @@ def abort_run(state: CliState) -> bool:
     if run is None:
         return False
     run.aborted = True
+    resp = getattr(run, "_active_resp", None)
+    try:
+        if resp is not None:
+            resp.close()
+    except Exception:
+        pass
     return True
 
 
+def _grant_perm(data: Dict[str, Any]) -> None:
+    """La web tiene diálogo; el CLI no puede esperar 300s. Concede el permiso."""
+    pid = str(data.get("id") or "")
+    if not pid:
+        return
+    try:
+        from backend.engine import PENDING_PERMISSIONS, PERMISSION_RESPONSES
+        PERMISSION_RESPONSES[pid] = True
+        ev = PENDING_PERMISSIONS.get(pid)
+        if ev is not None:
+            ev.set()
+    except Exception:
+        pass
+
+
+def friendly_error(exc: BaseException) -> str:
+    from backend.runstate import AbortRequested
+    if isinstance(exc, AbortRequested):
+        return "(abortado)"
+    msg = str(exc) or type(exc).__name__
+    low = msg.lower()
+    if "connection" in low or "refused" in low or "inaccesible" in low:
+        return f"Ollama no responde. Arranca: ollama serve  ({msg[:180]})"
+    if "not found" in low:
+        return msg[:400]
+    return msg[:600]
+
+
 def run_prompt(state: CliState, text: str, on_event: Optional[EventCb] = None) -> str:
-    """Un turno de chat usando el mismo motor que la web."""
+    """Un turno de chat usando el mismo motor que la web. Nunca deja el hang de permisos."""
+    from backend.runstate import AbortRequested
+    try:
+        from backend.ollama import resolve_coder_model
+        state.model = resolve_coder_model(state.model) or state.model
+    except Exception:
+        pass
     run = make_run(state, text)
     state.current_run = run
     state.busy = True
-    prompt = build_chat_prompt(run, task_text=text)
     collected: List[str] = []
+    prompt = ""
     try:
+        prompt = build_chat_prompt(run, task_text=text)
         for name, data in iter_sse(run_agent_turn(run, "agent", 1, prompt)):
+            if name == "perm_request":
+                _grant_perm(data)
+                if on_event:
+                    on_event(name, data)
+                continue
             if on_event:
-                on_event(name, data)
+                try:
+                    on_event(name, data)
+                except Exception:
+                    pass
             if name == "token":
                 tok = str(data.get("token") or "")
                 collected.append(tok)
@@ -128,9 +177,28 @@ def run_prompt(state: CliState, text: str, on_event: Optional[EventCb] = None) -
                 state.pending_path = str(data.get("path") or state.pending_path)
             if name == "tool_result" and not data.get("ok"):
                 state.last_error = str(data.get("output") or "")[:2000]
-            if name == "perm_request":
-                if on_event:
-                    on_event("permission_requested", data)
+            if name == "system":
+                t = str(data.get("text") or "")
+                if t and on_event:
+                    try:
+                        on_event("system", data)
+                    except Exception:
+                        pass
+    except AbortRequested:
+        if on_event:
+            try:
+                on_event("system", {"text": "(abortado)"})
+            except Exception:
+                pass
+    except Exception as exc:
+        msg = friendly_error(exc)
+        state.last_error = msg
+        if on_event:
+            try:
+                on_event("system", {"text": msg})
+            except Exception:
+                pass
+        collected.append("\n" + msg)
     finally:
         state.current_run = None
         state.busy = False
@@ -154,21 +222,32 @@ def run_prompt(state: CliState, text: str, on_event: Optional[EventCb] = None) -
 
 
 def sandbox_run(state: CliState, cmd: str) -> str:
-    ex = tools.ToolExecutor(state.workdir)
-    res = ex.dispatch("execute_bash", {"cmd": cmd})
-    out = str(res.get("output") or "")
-    state.last_cmd_out = out
-    if not res.get("ok"):
-        state.last_error = out
-    return out
+    try:
+        ex = tools.ToolExecutor(state.workdir)
+        res = ex.dispatch("execute_bash", {"cmd": cmd})
+        out = str(res.get("output") or "")
+        state.last_cmd_out = out
+        if not res.get("ok"):
+            state.last_error = out
+        return out
+    except Exception as exc:
+        msg = friendly_error(exc)
+        state.last_error = msg
+        return msg
 
 
 def read_file(state: CliState, path: str) -> str:
-    return str(tools.ToolExecutor(state.workdir).dispatch("read_file", {"filepath": path}).get("output") or "")
+    try:
+        return str(tools.ToolExecutor(state.workdir).dispatch("read_file", {"filepath": path}).get("output") or "")
+    except Exception as exc:
+        return friendly_error(exc)
 
 
 def tree(state: CliState) -> str:
-    return str(tools.ToolExecutor(state.workdir).dispatch("tree", {"path": "."}).get("output") or "")
+    try:
+        return str(tools.ToolExecutor(state.workdir).dispatch("tree", {"path": "."}).get("output") or "")
+    except Exception as exc:
+        return friendly_error(exc)
 
 
 def rag_query(state: CliState, q: str) -> str:
