@@ -15,7 +15,7 @@ SETTINGS_PATH = WORKSPACE_ROOT / "ollama_runtime.json"
 # Valores por defecto (iguales a los que el engine usa hoy).
 SETTINGS_DEFAULTS: Dict[str, Any] = {
     # Generación
-    "temperature": 0.7,
+    "temperature": 0.2,
     "top_p": 0.9,
     "top_k": 40,
     "min_p": 0.0,

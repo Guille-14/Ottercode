@@ -480,16 +480,21 @@ def _llm_request(run: Any, system_prompt: str, prompt: str, agent_id: str = "") 
     _allowed = getattr(run, "_native_allowed", None)
     _tools = tools.get_ollama_tools(_allowed) if _want_tools else None
     if LLM_BACKEND == "openai" or transport == "openai":
+        _oa_msgs: List[Dict[str, str]] = []
+        if system_prompt:
+            _oa_msgs.append({"role": "system", "content": system_prompt})
+        _hist = getattr(run, "messages", None)
+        if _hist:
+            _oa_msgs.extend(list(_hist))
+        else:
+            _oa_msgs.append({"role": "user", "content": prompt})
         oa = {
             "model": run.model,
             "stream": True,
             "max_tokens": NUM_PREDICT_DEFAULT,
             "temperature": _temp,
             "top_p": _top,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": _oa_msgs,
         }
         if _tools:
             oa["tools"] = _tools

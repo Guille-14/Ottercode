@@ -446,6 +446,10 @@ def _workspace_inventory(run: "OtterRun", limit: int = 32) -> str:
     return "\n".join(lines) if lines else "(workspace vacío)"
 
 
+def _workspace_inventory_lines(run: "OtterRun", limit: int = 32) -> str:
+    return _workspace_inventory(run, limit=limit)
+
+
 def build_chat_prompt(run: "OtterRun", task_text: Optional[str] = None) -> str:
     start = get_agent(run.start_agent)
     txt = task_text if task_text is not None else run.task_text
@@ -458,6 +462,13 @@ def build_chat_prompt(run: "OtterRun", task_text: Optional[str] = None) -> str:
         "workspace, usa tus skills.",
         f"USUARIO:\n{txt}",
     ]
+    inv_always = _workspace_inventory(run)
+    if inv_always and inv_always != "(workspace vacío)":
+        parts.append(
+            "# ARCHIVOS EN DISCO (YA EXISTEN: edítalos, no los recrees)\n"
+            f"{inv_always}\n"
+            "write_file SOLO si el path no existe. Si existe: edit_file/append_file."
+        )
     if getattr(run, "continue_task", ""):
         inv = _workspace_inventory(run)
         orig = ""

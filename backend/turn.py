@@ -97,6 +97,24 @@ def _thermal_ease(run: Any) -> Optional[str]:
     return None
 
 
+def json_extract_allowed(native_on: bool) -> bool:
+    """R1: native XOR JSON. Si native está ON, extract_tool_call no se usa."""
+    return not native_on
+
+
+def _finalize_needs_verify(run: Any) -> Optional[str]:
+    used = set(getattr(run, "_turn_tools", set()) or set())
+    writes = used & {"write_file", "append_file", "edit_file", "apply_patch"}
+    if not writes:
+        return None
+    if "execute_bash" not in used and "python_exec" not in used:
+        return (
+            "no has verificado; corre execute_bash "
+            "(py_compile / node --check / test existente) y luego finalizar"
+        )
+    return None
+
+
 def _run_native_tool(run: Any, agent_id: str, iteration: int, executor: Any, call: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
     """Ejecuta una herramienta de Function Calling nativa."""
     func = call.get("function", {})
@@ -153,9 +171,21 @@ def _run_native_tool(run: Any, agent_id: str, iteration: int, executor: Any, cal
             yield {"kind": "result", "name": name, "ok": False, "output": msg}
             return {"ok": False, "output": msg}
     if name == "finalizar":
+        blocked = _finalize_needs_verify(run)
+        if blocked:
+            yield {"kind": "result", "name": name, "ok": False, "output": blocked}
+            return {"ok": False, "output": blocked}
         resumen = str(args.get("resumen", "") or "finalizado")
         yield {"kind": "result", "name": name, "ok": True, "output": resumen}
         return {"ok": True, "output": resumen}
+
+    if name == "write_file":
+        fp = str(args.get("filepath") or args.get("path") or "")
+        content = str(args.get("content") or "")
+        if fp and not _write_size_guard(run, fp, content):
+            msg = f"RECHAZADO: no sobrescribas {fp} con una versión menor. Usa edit_file/append_file."
+            yield {"kind": "result", "name": name, "ok": False, "output": msg}
+            return {"ok": False, "output": msg}
 
     res = executor.dispatch(name, args)
     out = res.get("output", "")
@@ -374,12 +404,20 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                 if getattr(run, "_native_done", False):
                     break
                 continue
+            # Native ON y sin tool_calls: XOR — no extraer JSON.
+            run.transcript.append(
+                {"kind": "agent", "agent": agent_id, "iteration": iteration, "text": parse_text}
+            )
+            run.messages.append({"role": "assistant", "content": parse_text})
+            break
 
         run.transcript.append(
             {"kind": "agent", "agent": agent_id, "iteration": iteration, "text": parse_text}
         )
         run.messages.append({"role": "assistant", "content": parse_text})
 
+        if not json_extract_allowed(_native_on):
+            break
         call = extract_tool_call(parse_text)
         if call is None:
             # Robustez: el agente intentó una skill con JSON inválido →
@@ -461,6 +499,18 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         title = tools.tool_title(tool_name, args)
 
         if tool_name == "finalizar":
+            blocked = _finalize_needs_verify(run)
+            if blocked:
+                yield sse(SseEvent.tool_call, {
+                    "id": call_id, "agent": agent_id, "iteration": iteration,
+                    "tool": tool_name, "args": args, "title": title,
+                })
+                yield sse(SseEvent.tool_result, {
+                    "id": call_id, "tool": tool_name, "ok": False,
+                    "output": blocked, "ms": 0,
+                })
+                run.messages.append({"role": "user", "content": blocked})
+                continue
             run._turn_tools.add("finalizar")
             # 🛟 v4.9 · FIX A: si esta MISMA generación llevaba un write/append
             # con contenido grande cuyo JSON el extractor saltó (un escape

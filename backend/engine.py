@@ -14,7 +14,11 @@ from typing import Iterator, Optional, Dict, Any, List, Tuple
 # FASE 5 · Gate de permisos para herramientas destructivas
 PENDING_PERMISSIONS: Dict[str, threading.Event] = {}
 PERMISSION_RESPONSES: Dict[str, bool] = {}
-ASK_PERMISSIONS = os.environ.get("OTTERCODE_ASK_PERMISSIONS", "1").strip().lower() not in ("0", "false", "no")
+def _ask_permissions() -> bool:
+    return os.environ.get("OTTERCODE_ASK_PERMISSIONS", "1").strip().lower() not in ("0", "false", "no")
+
+
+ASK_PERMISSIONS = True  # se relee por request en _needs_permission
 _DANGEROUS_TOOLS = {"python_exec", "execute_bash"}
 _WRITE_FS_TOOLS = {"write_file", "append_file", "edit_file", "apply_patch", "mkdir", "git_commit"}
 
@@ -34,7 +38,7 @@ def _path_outside_workspace(run: Any, args: Dict[str, Any]) -> bool:
 
 
 def _needs_permission(run: Any, name: str, args: Dict[str, Any]) -> bool:
-    if not ASK_PERMISSIONS or getattr(run, "yolo", False):
+    if not _ask_permissions() or getattr(run, "yolo", False):
         return False
     if getattr(run, "_session_allow", False):
         return False

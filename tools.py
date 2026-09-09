@@ -497,7 +497,7 @@ class ToolExecutor:
                 old = ""
         new = str(content)
         allow_ow = os.environ.get("OTTERCODE_ALLOW_OVERWRITE", "0").strip().lower() in ("1", "true", "yes")
-        if existed and old.strip() and len(old) > 40 and not allow_ow:
+        if existed and old.strip() and len(old) > 80 and not allow_ow:
             snippet = "\n".join(old.splitlines()[:50])[:2500]
             raise ToolError(
                 json.dumps({

@@ -143,6 +143,79 @@ def test_otter_no_weather():
     assert "apply_patch" in a.tools_disponibles
 
 
+def test_json_extract_xor_native():
+    from backend.turn import json_extract_allowed
+    assert json_extract_allowed(True) is False
+    assert json_extract_allowed(False) is True
+
+
+def test_temperature_zero_survives():
+    os.environ["OTTERCODE_NATIVE_TOOLS"] = "off"
+    from backend.ollama import _llm_request
+    from backend.runstate import OtterRun
+    with tempfile.TemporaryDirectory() as d:
+        run = OtterRun("t", "x", "tinyllama", False, "chat", "agent", Path(d))
+        run.temperature = 0.0
+        run._native_allowed = ["read_file"]
+        url, payload = _llm_request(run, "sys", "hola", agent_id="agent")
+        assert payload["options"]["temperature"] == 0.0
+        assert "tools" not in payload or not payload.get("tools")
+    os.environ.pop("OTTERCODE_NATIVE_TOOLS", None)
+
+
+def test_finalize_without_verify():
+    from backend.turn import _finalize_needs_verify
+    run = type("R", (), {"_turn_tools": {"edit_file"}})()
+    msg = _finalize_needs_verify(run)
+    assert msg and "verificado" in msg
+    run2 = type("R", (), {"_turn_tools": {"edit_file", "execute_bash"}})()
+    assert _finalize_needs_verify(run2) is None
+
+
+def test_reject_overwrite_existing_blocks_write_file():
+    with tempfile.TemporaryDirectory() as d:
+        ex = tools.ToolExecutor(d)
+        big = "x" * 120
+        r1 = ex.dispatch("write_file", {"filepath": "index.html", "content": big})
+        assert r1["ok"]
+        r2 = ex.dispatch("write_file", {"filepath": "index.html", "content": "NUEVO"})
+        assert not r2["ok"]
+        assert "file_exists_use_edit_file" in r2["output"]
+        assert Path(d, "index.html").read_text() == big
+
+
+def test_inventory_without_continue():
+    from backend.prompts import build_chat_prompt
+    from backend.runstate import OtterRun
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "index.html").write_text("<html>" + "a" * 80 + "</html>")
+        run = OtterRun("t", "mejora el CSS", "tinyllama", False, "chat", "agent", Path(d))
+        run.continue_task = ""
+        ptxt = build_chat_prompt(run)
+        assert "index.html" in ptxt
+        assert "YA EXISTEN" in ptxt
+
+
+def test_openai_keeps_messages():
+    os.environ["OTTERCODE_NATIVE_TOOLS"] = "off"
+    from backend import ollama as ol
+    from backend.runstate import OtterRun
+    with tempfile.TemporaryDirectory() as d:
+        run = OtterRun("t", "x", "m", False, "chat", "agent", Path(d))
+        run.messages = [{"role": "user", "content": "turno1"}, {"role": "assistant", "content": "ok"}]
+        run.temperature = 0.0
+        old = ol.LLM_BACKEND
+        ol.LLM_BACKEND = "openai"
+        try:
+            url, payload = ol._llm_request(run, "sys", "nuevo", agent_id="agent")
+            assert "turno1" in payload["messages"][1]["content"]
+            assert payload["temperature"] == 0.0
+        finally:
+            ol.LLM_BACKEND = old
+    os.environ.pop("OTTERCODE_NATIVE_TOOLS", None)
+
+
+
 if __name__ == "__main__":
     fails = []
     for name, fn in list(globals().items()):
