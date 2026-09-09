@@ -32,6 +32,13 @@ def test_session_roundtrip(tmp_path, monkeypatch):
     assert any(r["id"] == "abc" for r in rows)
 
 
+def test_vram_usage_tuple():
+    from ottercode_cli.core_bridge import vram_usage
+    u, t = vram_usage()
+    assert t > 0
+    assert u >= 0
+
+
 def test_list_models_type():
     from ottercode_cli.core_bridge import list_models
     m = list_models()

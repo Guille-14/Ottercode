@@ -119,6 +119,7 @@ def run_prompt(state: CliState, text: str, on_event: Optional[EventCb] = None) -
             if on_event:
                 on_event("permission_requested", data)
     text_out = "".join(collected)
+    state.ctx_used = min(NUM_CTX_DEFAULT, max(state.ctx_used, (len(prompt) + len(text_out)) // 4))
     state.messages.append({"role": "user", "content": text})
     state.messages.append({"role": "assistant", "content": text_out[:8000]})
     save_session({
@@ -156,6 +157,60 @@ def tree(state: CliState) -> str:
 
 def rag_query(state: CliState, q: str) -> str:
     return str(tools.ToolExecutor(state.workdir).dispatch("semantic_search", {"query": q}).get("output") or "")
+
+
+def vram_usage() -> tuple[float, float]:
+    """(used_gb, total_gb). nvidia-smi; fallback (0, 8)."""
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
+            timeout=2,
+            text=True,
+        ).strip().splitlines()[0]
+        used, total = [float(x.strip()) for x in out.split(",")[:2]]
+        return used / 1024.0, total / 1024.0
+    except Exception:
+        try:
+            from backend.config import VRAM_TOTAL_BYTES
+            return 0.0, max(VRAM_TOTAL_BYTES / (1024 ** 3), 1.0)
+        except Exception:
+            return 0.0, 8.0
+
+
+def cockpit(state: CliState) -> Dict[str, Any]:
+    import mcp_client
+    ask = os.environ.get("OTTERCODE_ASK_PERMISSIONS", "1")
+    sand = os.environ.get("OTTERCODE_SANDBOX_REQUIRED", "1")
+    mcp_ok = False
+    try:
+        mcp_ok = bool(mcp_client.mcp_loop.is_ready())
+    except Exception:
+        mcp_ok = False
+    mem = ""
+    try:
+        from backend.memory import get_memory
+        mem = (get_memory() or "")[:80]
+    except Exception:
+        mem = ""
+    used_gb, tot_gb = vram_usage()
+    ctx_tot = int(NUM_CTX_DEFAULT)
+    ctx_used = int(state.ctx_used or 0)
+    yolo = state.yolo or ask in ("0", "false")
+    return {
+        "model": state.model,
+        "ctx_used": ctx_used,
+        "ctx_tot": ctx_tot,
+        "vram_used": used_gb,
+        "vram_tot": tot_gb,
+        "sandbox": "bubblewrap" if sand not in ("0", "false") else "off",
+        "mcp": mcp_ok,
+        "memory": mem or "Perfil usuario",
+        "workdir": str(state.workdir),
+        "perms": "YOLO" if yolo else "ASK",
+        "session": state.session_id,
+        "ollama": os.environ.get("OTTERCODE_OLLAMA", "http://127.0.0.1:11434"),
+    }
 
 
 def status_blob(state: CliState) -> str:

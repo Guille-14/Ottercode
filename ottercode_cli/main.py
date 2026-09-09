@@ -125,10 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "review":
         return _repl(state, "Revisa el workspace: tree + read_file de lo importante y un veredicto breve.")
     if cmd == "chat":
-        if args.tui and not args.plain:
-            from ottercode_cli.tui import run_tui
-            return run_tui(state)
-        return _repl(state)
+        return _launch(state, args)
     print(SLASH_HELP)
     return 0
 
