@@ -531,8 +531,10 @@ function ModelSelect() {
   const model = useUi((s) => s.model)
   const setModel = useUi((s) => s.setModel)
   const [models, setModels] = useState<string[]>([])
+  const [project, setProject] = useState('')
 
   useEffect(() => {
+    api.project().then((p) => setProject(p.path || '')).catch(() => undefined)
     api
       .models()
       .then((r) => {

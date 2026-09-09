@@ -10,6 +10,7 @@ import { Button, Card } from '../ui'
 import ChatHero from './ChatHero'
 import ChatMessageList from './ChatMessageList'
 import ChatInputBar from './ChatInputBar'
+import StatusTicker from '../StatusTicker'
 
 export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
   const {
@@ -209,6 +210,7 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
         )}
 
         {/* Barra flotante inferior estilo OpenWebUI */}
+        <StatusTicker />
         <ChatInputBar
           onLaunch={onLaunch}
           streaming={streaming}

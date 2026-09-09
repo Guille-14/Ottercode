@@ -3,7 +3,7 @@
 // con reintentar y acciones de copia/zip. hideLogs oculta el razonamiento
 // intermedio (interruptor "Logs" de la cadena).
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import { Bot, User, ChevronDown, Wrench, Copy, Check, FileCode, RotateCcw, Download, Loader2 } from 'lucide-react'
 import type { MissionEvent } from '../store'
@@ -143,7 +143,38 @@ function buildTimeline(mission: MissionEvent[]): TimelineItem[] {
   return out
 }
 
-function splitThinking(buf: string): { thought: string; text: string } {
+function MdPre({ children }: { children?: ReactNode }) {
+  const [ok, setOk] = useState(false)
+  const text = useMemo(() => {
+    const walk = (n: unknown): string => {
+      if (typeof n === 'string') return n
+      if (!n || typeof n !== 'object') return ''
+      const o = n as { props?: { children?: unknown } }
+      if (o.props?.children != null) {
+        const c = o.props.children
+        return Array.isArray(c) ? c.map(walk).join('') : walk(c)
+      }
+      return ''
+    }
+    return walk(children)
+  }, [children])
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        className="absolute right-2 top-2 hidden rounded border border-line bg-panel px-1.5 py-0.5 text-[10px] text-muted group-hover:block"
+        onClick={() => {
+          void navigator.clipboard.writeText(text)
+          setOk(true)
+          setTimeout(() => setOk(false), 1200)
+        }}
+      >
+        {ok ? 'copiado' : 'copiar'}
+      </button>
+      <pre className="oc-mono overflow-x-auto rounded-xl border border-line bg-codebg p-3 text-[12px]">{children}</pre>
+    </div>
+  )
+}
   // Captura bloques <think>...</think>
   const thinkMatch = buf.match(/<think>([\s\S]*?)<\/think>/i)
   if (thinkMatch) {
@@ -383,7 +414,7 @@ const SegBubble = memo(function SegBubble({
           </pre>
         ) : text ? (
           <div className="oc-md text-sm leading-relaxed text-ink">
-            <Markdown>{text}</Markdown>
+            <Markdown components={{ pre: MdPre }}>{text}</Markdown>
           </div>
         ) : null}
 
