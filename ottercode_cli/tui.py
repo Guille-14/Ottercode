@@ -34,6 +34,15 @@ _SKIP = {
 }
 
 
+def _esc(s: object) -> str:
+    return str(s).replace("\\", "\\\\").replace("[", "\\[")
+
+
+def _safe_txt(s: object) -> str:
+    t = str(s or "").encode("utf-8", "replace").decode("utf-8")
+    return t.replace("\x00", "")[:8000]
+
+
 def _bar(frac: float, width: int = 18) -> str:
     frac = max(0.0, min(1.0, frac))
     n = int(round(frac * width))
@@ -45,16 +54,16 @@ def _status_markup(c: dict) -> str:
     vram_f = (c["vram_used"] / c["vram_tot"]) if c["vram_tot"] else 0
     mcp = "ok" if c["mcp"] else "off"
     return (
-        f"Modelo   [cyan]{c['model']}[/cyan]\n"
+        f"Modelo   [cyan]{_esc(c['model'])}[/cyan]\n"
         f"Ctx      {c['ctx_used']} / {c['ctx_tot']}\n"
         f"[cyan]{_bar(ctx_f)}[/cyan]\n"
         f"VRAM     {c['vram_used']:.1f} / {c['vram_tot']:.1f} GB\n"
         f"[green]{_bar(vram_f)}[/green]\n"
-        f"Sandbox  {c['sandbox']}\n"
+        f"Sandbox  {_esc(c['sandbox'])}\n"
         f"MCP      {mcp}\n"
-        f"Permisos {c['perms']}\n"
-        f"Dir      {c['workdir']}\n"
-        f"Sesión   {c['session']}"
+        f"Permisos {_esc(c['perms'])}\n"
+        f"Dir      {_esc(c['workdir'])}\n"
+        f"Sesión   {_esc(c['session'])}"
     )
 
 
@@ -94,6 +103,7 @@ if HAS_TEXTUAL:
     class OtterTui(App):
         TITLE = "OtterCode Neo TUI"
         AUTO_FOCUS = "#in"
+        ENABLE_COMMAND_PALETTE = False
         CSS = """
         Screen { background: #0b1220; color: #c9d4e3; }
         Header { background: #0e1624; color: #86efac; }
@@ -160,6 +170,14 @@ if HAS_TEXTUAL:
                     yield VerticalScroll(Static("Listo.", id="diff", markup=False))
             yield Footer()
 
+        def _handle_exception(self, error: Exception) -> None:
+            self.busy = False
+            try:
+                self._chat().write_line(_safe_txt(f"(capturado) {error}"))
+                self.query_one("#in", Input).focus()
+            except Exception:
+                pass
+
         def on_mount(self) -> None:
             chat = self.query_one("#chat", Log)
             chat.write_line("OtterCode Neo TUI")
@@ -189,8 +207,13 @@ if HAS_TEXTUAL:
         def action_focus_prompt(self) -> None:
             self.query_one("#in", Input).focus()
 
-        def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
-            p = Path(str(event.path))
+        def on_directory_tree_file_selected(self, event) -> None:
+            try:
+                raw = getattr(event, "path", None)
+                p = Path(str(raw))
+            except Exception:
+                return
+            p = Path(str(p))
             try:
                 rel = p.relative_to(self.state.workdir)
             except Exception:
@@ -273,17 +296,19 @@ if HAS_TEXTUAL:
                 return
             self._dispatch(line)
 
+        def _line(self, text: str) -> None:
+            try:
+                self._chat().write_line(_safe_txt(text)[:2000])
+            except Exception:
+                pass
+
         def _push_text(self, chunk: str) -> None:
             if not chunk:
                 return
-            log = self._chat()
             try:
-                log.write(chunk)
+                self._chat().write(_safe_txt(chunk))
             except Exception:
-                try:
-                    log.write_line(chunk.replace("\r", "")[:2000])
-                except Exception:
-                    pass
+                self._line(chunk)
 
         def _dispatch(self, line: str) -> None:
             from ottercode_cli.commands import handle_slash

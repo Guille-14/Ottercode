@@ -82,7 +82,11 @@ def make_run(state: CliState, task: str, system_inject: str = "") -> OtterRun:
 def iter_sse(gen: Iterator[str]) -> Iterator[tuple[str, Dict[str, Any]]]:
     buf = ""
     for chunk in gen:
-        buf += chunk
+        if chunk is None:
+            continue
+        if isinstance(chunk, bytes):
+            chunk = chunk.decode("utf-8", "replace")
+        buf += str(chunk)
         while "\n\n" in buf:
             frame, buf = buf.split("\n\n", 1)
             name, data = "", {}
@@ -206,18 +210,21 @@ def run_prompt(state: CliState, text: str, on_event: Optional[EventCb] = None) -
     state.ctx_used = min(NUM_CTX_DEFAULT, max(state.ctx_used, (len(prompt) + len(text_out)) // 4))
     state.messages.append({"role": "user", "content": text})
     state.messages.append({"role": "assistant", "content": text_out[:8000]})
-    save_session({
-        "id": state.session_id,
-        "task_id": state.task_id,
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "model": state.model,
-        "task": text[:200],
-        "workdir": str(state.workdir),
-        "messages": state.messages[-40:],
-        "learn": state.learn,
-        "learn_topic": state.learn_topic,
-    })
+    try:
+        save_session({
+            "id": state.session_id,
+            "task_id": state.task_id,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "model": state.model,
+            "task": text[:200],
+            "workdir": str(state.workdir),
+            "messages": state.messages[-40:],
+            "learn": state.learn,
+            "learn_topic": state.learn_topic,
+        })
+    except Exception:
+        pass
     return text_out
 
 
@@ -294,11 +301,6 @@ def cockpit(state: CliState) -> Dict[str, Any]:
     except Exception:
         mcp_ok = False
     mem = ""
-    try:
-        from backend.memory import get_memory
-        mem = (get_memory() or "")[:80]
-    except Exception:
-        mem = ""
     used_gb, tot_gb = vram_usage()
     ctx_tot = int(NUM_CTX_DEFAULT)
     ctx_used = int(state.ctx_used or 0)

@@ -42,6 +42,11 @@ def test_session_roundtrip(tmp_path, monkeypatch):
     assert any(r["id"] == "abc" for r in rows)
 
 
+def test_esc_markup_brackets():
+    from ottercode_cli.tui import _esc
+    assert "\\[" in _esc("a[b]c")
+
+
 def test_friendly_error_abort():
     from ottercode_cli.core_bridge import friendly_error
     from backend.runstate import AbortRequested
