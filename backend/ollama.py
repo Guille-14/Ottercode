@@ -223,6 +223,25 @@ def resolve_coder_model(requested: str = "") -> str:
 # Errores amigables + stream de Ollama
 # ---------------------------------------------------------------------------
 
+class TruncatedToolCall(RuntimeError):
+    """llama-server cortó el JSON de arguments de un tool_call nativo."""
+
+    def __init__(self, tool: str, detail: str = ""):
+        self.tool = tool or "tool"
+        super().__init__(detail or f"JSON truncado en {self.tool}")
+
+
+def _truncated_tool_name(err: str) -> Optional[str]:
+    e = err or ""
+    m = re.search(r'invalid tool call arguments for "([^"]+)"', e, re.I)
+    if m:
+        return m.group(1)
+    low = e.lower()
+    if "unexpected end of json" in low and "tool call" in low:
+        return "write_file"
+    return None
+
+
 class ContextOverflow(RuntimeError):
     """Ollama rechazó la llamada por ventana de contexto llena."""
 
@@ -349,6 +368,11 @@ def stream_llm(
                         continue
                     if _is_context_overflow(_detail):
                         raise ContextOverflow(_detail)
+                    trunc = _truncated_tool_name(_detail)
+                    if trunc:
+                        stats["_truncated_tool"] = trunc
+                        stats["_truncated_err"] = _detail[:400]
+                        return "".join(collected), stats
                     raise RuntimeError(
                         _with_model_hint(
                             f"El modelo devolvió HTTP {resp.status_code}: {_detail}",
@@ -396,6 +420,11 @@ def stream_llm(
                         err = str(data["error"])
                         if _is_context_overflow(err):
                             raise ContextOverflow(err)
+                        trunc = _truncated_tool_name(err)
+                        if trunc:
+                            stats["_truncated_tool"] = trunc
+                            stats["_truncated_err"] = err[:400]
+                            break
                         raise RuntimeError(_with_model_hint(f"Ollama: {err}", run.model))
                     if data.get("done"):
                         stats = {

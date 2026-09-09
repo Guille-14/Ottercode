@@ -356,8 +356,29 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                 })
             _save_partial_on_abort(run, agent_id, iteration)
             raise
+        except RuntimeError as _rte:
+            from backend.ollama import _truncated_tool_name
+            _tn = _truncated_tool_name(str(_rte))
+            if not _tn:
+                raise
+            last_text, _stats = "", {"_truncated_tool": _tn, "_truncated_err": str(_rte)[:400]}
         # v3.4 · el parsing y el historial usan el texto SIN bloques <think>
         parse_text = _strip_think(last_text)
+        trunc_tool = str((_stats or {}).get("_truncated_tool") or "")
+        if trunc_tool:
+            fb = (
+                f"ERROR: la llamada nativa a '{trunc_tool}' se CORTÓ "
+                "(JSON de arguments inválido / unexpected end of JSON). "
+                "PROHIBIDO reenviar el archivo entero con write_file. "
+                "1) read_file del trozo a cambiar. "
+                "2) edit_file con old_string CORTO (1-8 líneas exactas) + new_string. "
+                "Una sección por llamada. Archivo nuevo pequeño: write_file ≤80 líneas."
+            )
+            yield sse(SseEvent.system, {
+                "text": f"⚠️ {trunc_tool}: JSON de tool cortado. Pidiendo edit_file…",
+            })
+            run.messages.append({"role": "user", "content": fb})
+            continue
         # FASE 5 · Native Function Calling
         if native_tools_enabled(run.model):
             _msg = _stats.get("message")

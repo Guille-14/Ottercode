@@ -46,11 +46,10 @@ def _forced_step_prompt(agent_id: str, used: set) -> Optional[str]:
     real = set(used or []) - {"finalizar"}
     if agent_id == "developer" and not (real & _WRITE_TOOLS):
         return (
-            "CORRECCIÓN OBLIGATORIA: terminaste tu turno SIN crear ni modificar "
-            "NI UN solo archivo (cero write_file/append_file). Prohibido dar "
-            "explicaciones: llama AHORA a write_file con la PRIMERA parte del "
-            "archivo principal (≤150 líneas) y continúa con append_file hasta "
-            "completarlo. Solo después puedes finalizar."
+            "CORRECCIÓN OBLIGATORIA: terminaste SIN editar archivos. "
+            "Si el archivo YA EXISTE: read_file + edit_file (old_string corto). "
+            "PROHIBIDO write_file sobre existentes (el JSON se corta y peta). "
+            "Solo write_file si el path no existe y es corto. Luego execute_bash y finalizar."
         )
     if agent_id == "researcher" and not (real & _EXPLORE_TOOLS):
         return (
@@ -141,6 +140,12 @@ def run_simple_agent(
 def run_task_stream(run: OtterRun) -> Iterator[str]:
     """Ejecuta la misión (cadena delegada o chat directo) y emite SSE en vivo."""
     started = time.time()
+    if getattr(run, "continue_task", ""):
+        try:
+            if run.executor.list_workspace():
+                run._files_ever_written = True
+        except Exception:
+            pass
     # v4.1 · ▶ ejecución de un plan ya aprobado (resume_plan)
     resumed = bool(getattr(run, "resume_plan", None))
     yield sse(SseEvent.task_start, {

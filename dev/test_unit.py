@@ -216,6 +216,20 @@ def test_openai_keeps_messages():
 
 
 
+def test_truncated_tool_name():
+    from backend.ollama import _truncated_tool_name
+    err = 'invalid tool call arguments for "write_file": unexpected end of JSON input'
+    assert _truncated_tool_name(err) == "write_file"
+    assert _truncated_tool_name("CUDA OOM") is None
+
+
+def test_forced_step_prefers_edit():
+    from backend.loop import _forced_step_prompt
+    msg = _forced_step_prompt("developer", set())
+    assert msg and "edit_file" in msg
+    assert "write_file sobre existentes" in msg.lower() or "PROHIBIDO write_file" in msg
+
+
 if __name__ == "__main__":
     fails = []
     for name, fn in list(globals().items()):
