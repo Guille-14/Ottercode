@@ -1454,13 +1454,13 @@ class ToolExecutor:
                 content = str(it.get("content", ""))[:300]
                 status = str(it.get("status", "pending")).lower().strip()
                 if status in ("done", "complete", "completed", "completado", "x"):
-                    status = "completed"
+                    status = "done"
                 elif status in ("in_progress", "doing", "en_curso", "en curso", "~"):
                     status = "in_progress"
                 else:
                     status = "pending"
                 evidence = str(it.get("evidence") or it.get("verificacion") or "").strip()
-                if status == "completed" and len(evidence) < 8:
+                if status in ("done", "completed") and len(evidence) < 8 and prev_by.get(content):
                     old = prev_by.get(content) or {}
                     if str(old.get("status")) == "completed" and old.get("evidence"):
                         evidence = str(old.get("evidence"))
@@ -1501,7 +1501,10 @@ class ToolExecutor:
         lines = []
         for t in data:
             who = f"[{t['agent']}] " if t.get("agent") else ""
-            lines.append(f"[{t.get('status', '?'):>9}] {who}{t.get('content', '')}")
+            st = str(t.get("status", "?"))
+            if st == "completed":
+                st = "done"
+            lines.append(f"[{st}] {who}{t.get('content', '')}")
         return "\n".join(lines) if lines else "(plan vacío)"
 
     # --------------------------------- web API -------------------------------

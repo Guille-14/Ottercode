@@ -544,7 +544,7 @@ def _prev_conversation_block(task_id: str, max_entries: int = 16,
         lines.append(f"{who}: {txt}")
     lines.append(
         "El usuario continúa: itera sobre lo que ya hay. "
-        "NO empieces de cero. NO inventes una web de nutrias ni un demo."
+        "no empieces de cero. NO inventes una web de nutrias ni un demo."
     )
     return "\n".join(lines)
 

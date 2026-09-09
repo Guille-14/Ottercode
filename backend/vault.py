@@ -331,7 +331,7 @@ def memory_note_for_run(run: Any, status: str) -> Optional[str]:
     Devuelve la ruta relativa de la nota (para SSE/transcript) o None si no
     hay vault configurado o algo falla. Idempotente por misión (_memory_done).
     """
-    if getattr(run, "_memory_done", True):
+    if getattr(run, "_memory_done", False):
         return None
     run._memory_done = True                      # marca SIEMPRE: 1 intento
     root = _vault_root_checked()
@@ -448,6 +448,7 @@ def _memory_recall(task_text: str, max_chars: int = 2400,
             if score >= 2:
                 candidates.append((score, p))
         candidates.sort(key=lambda sp: -sp[0])
+        perfil_rels.sort(key=lambda r: (0 if "usuario" in r.lower() else 1, r))
 
         blocks: List[str] = []
         used = 0

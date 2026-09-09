@@ -412,6 +412,7 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                         # v5.1 · el contenido salvado SIEMPRE está cortado
                         # (num_predict mató el JSON): hay que completarlo.
                         run._last_salvaged_file = s_nombre
+                        run._turn_salvaged_truncated = True
                         try:
                             _tail = (run.workdir / s_nombre).read_text(encoding="utf-8")[-900:]
                         except OSError:

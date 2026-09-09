@@ -310,7 +310,7 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
                 run.meta["context"] = ""
                 run.transcript.append(
                     {"kind": "system",
-                     "text": "📋 Plan listo: esperando aprobación del usuario."}
+                     "text": "📋 ULTRA PLAN listo: esperando aprobación del usuario."}
                 )
                 _activity_finish("planned")
                 yield sse(SseEvent.task_done, {
@@ -554,7 +554,7 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
                         )
                         yield sse(SseEvent.system, {
                             "text": "⚠️ El paso forzado no pudo ejecutarse; "
-                                    "se pasa al Revisor."
+                                    "No se pudo completar; se pasa al Revisor."
                         })
             verdict = yield from run_agent_turn(  # type: ignore[misc]
                 run, "reviewer", iteration, build_reviewer_prompt(run, plan)
