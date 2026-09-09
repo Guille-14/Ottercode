@@ -24,7 +24,7 @@ except ImportError:
 
 SLASH_HINTS = [
     "/help", "/status", "/model", "/files", "/open ", "/edit ", "/diff",
-    "/apply", "/reject", "/run ", "/test", "/explain", "/learn ", "/yolo",
+    "/apply", "/reject", "/todo", "/run ", "/test", "/explain", "/learn ", "/yolo",
     "/rag ", "/clear", "/history", "/resume ", "/permissions", "/mcp", "/tools",
 ]
 
@@ -53,12 +53,15 @@ def _status_markup(c: dict) -> str:
     ctx_f = (c["ctx_used"] / c["ctx_tot"]) if c["ctx_tot"] else 0
     vram_f = (c["vram_used"] / c["vram_tot"]) if c["vram_tot"] else 0
     mcp = "ok" if c["mcp"] else "off"
+    role = c.get("role") or "especialista"
+    td, tt = int(c.get("todo_done") or 0), int(c.get("todo_total") or 0)
     return (
-        f"Modelo   [cyan]{_esc(c['model'])}[/cyan]\n"
+        f"Modelo   [{role}] {_esc(c['model'])}\n"
         f"Ctx      {c['ctx_used']} / {c['ctx_tot']}\n"
-        f"[cyan]{_bar(ctx_f)}[/cyan]\n"
+        f"{_bar(ctx_f)}\n"
         f"VRAM     {c['vram_used']:.1f} / {c['vram_tot']:.1f} GB\n"
-        f"[green]{_bar(vram_f)}[/green]\n"
+        f"{_bar(vram_f)}\n"
+        f"Todo     {td}/{tt} completados\n"
         f"Sandbox  {_esc(c['sandbox'])}\n"
         f"MCP      {mcp}\n"
         f"Permisos {_esc(c['perms'])}\n"
@@ -100,26 +103,58 @@ if HAS_TEXTUAL:
         def action_cancel(self) -> None:
             self.dismiss(self.current)
 
+    class PermModal(ModalScreen[str]):
+        BINDINGS = [Binding("escape", "deny", "Denegar"), Binding("a", "ok", "Aprobar"),
+                    Binding("d", "deny", "Denegar"), Binding("s", "always", "Siempre")]
+
+        def __init__(self, title: str) -> None:
+            super().__init__()
+            self._title = title or "Permiso"
+
+        def compose(self) -> ComposeResult:
+            yield Label(self._title[:240])
+            yield Label("Aprobar (a) / Denegar (d) / Siempre esta sesión (s)")
+            yield ListView(
+                ListItem(Label("Aprobar")),
+                ListItem(Label("Denegar")),
+                ListItem(Label("Siempre esta sesión")),
+                id="perm-opts",
+            )
+
+        def on_list_view_selected(self, event: ListView.Selected) -> None:
+            idx = event.list_view.index or 0
+            self.dismiss(["a", "d", "s"][min(idx, 2)])
+
+        def action_ok(self) -> None:
+            self.dismiss("a")
+
+        def action_deny(self) -> None:
+            self.dismiss("d")
+
+        def action_always(self) -> None:
+            self.dismiss("s")
+
     class OtterTui(App):
         TITLE = "OtterCode Neo TUI"
         AUTO_FOCUS = "#in"
         ENABLE_COMMAND_PALETTE = False
         CSS = """
-        Screen { background: #0b1220; color: #c9d4e3; }
-        Header { background: #0e1624; color: #86efac; }
-        Footer { background: #0a1018; color: #64748b; }
+        Screen { background: #09090B; color: #FAFAFA; }
+        Header { background: #18181B; color: #FAFAFA; }
+        Footer { background: #09090B; color: #A1A1AA; }
         #col-files { width: 26; }
         #col-agent { width: 1fr; }
         #col-side { width: 36; }
-        .panel-title { color: #64748b; text-style: bold; padding: 0 1; height: 1; }
-        DirectoryTree { height: 1fr; border: solid #1e293b; background: #0b1220; color: #94a3b8; }
-        #chat { height: 1fr; border: solid #1e293b; background: #0b1220; color: #e2e8f0; }
+        .panel-title { color: #A1A1AA; text-style: bold; padding: 0 1; height: 1; }
+        DirectoryTree { height: 1fr; border: solid #27272A; background: #18181B; color: #A1A1AA; }
+        #chat { height: 1fr; border: solid #27272A; background: #09090B; color: #FAFAFA; }
         #composer { height: auto; }
-        Input { background: #111827; border: solid #334155; color: #e8edf5; }
-        Input:focus { border: solid #22d3ee; }
-        #hint { color: #475569; height: 1; padding: 0 1; }
-        #status { height: auto; max-height: 16; border: solid #1e293b; padding: 1 1; }
-        #diff { height: 1fr; border: solid #1e293b; padding: 1 1; color: #86efac; }
+        Input { background: #18181B; border: solid #27272A; color: #FAFAFA; }
+        Input:focus { border: solid #A1A1AA; }
+        #hint { color: #A1A1AA; height: 1; padding: 0 1; }
+        #status { height: auto; max-height: 18; border: solid #27272A; padding: 1 1; }
+        #diff { height: 1fr; border: solid #27272A; padding: 1 1; color: #FAFAFA; }
+        ListView { background: #18181B; border: solid #27272A; }
         """
         BINDINGS = [
             Binding("ctrl+q", "quit", "salir"),
@@ -319,6 +354,15 @@ if HAS_TEXTUAL:
                 if sl.name == "model" and not sl.arg:
                     self.action_pick_model()
                     return
+                if sl.name == "apply":
+                    self.state.plan_approved = True
+                    self.state.awaiting_plan = False
+                    self._chat().write_line("Plan aprobado. Ejecutando…")
+                    self.busy = True
+                    self._run_agent(
+                        "El usuario APROBÓ el plan (todo_read). Ejecuta los pasos ahora. No regeneres el plan."
+                    )
+                    return
                 if sl.name == "clear":
                     self._chat().clear()
                     self._chat().write_line("OtterCode Neo TUI")
@@ -354,8 +398,27 @@ if HAS_TEXTUAL:
                 elif name == "diff":
                     self.state.pending_diff = str(data.get("diff") or "")
                     self.query_one("#diff", Static).update(self.state.pending_diff[:8000] or "(sin diff)")
-                elif name in ("system", "permission_requested", "perm_request"):
-                    t = str(data.get("text") or data.get("tool") or "")
+                elif name in ("permission_requested", "perm_request"):
+                    title = str(data.get("title") or data.get("tool") or "Permiso")
+                    pid = str(data.get("id") or "")
+                    try:
+                        self.query_one("#in", Input).disabled = True
+                    except Exception:
+                        pass
+                    self._chat().write_line(f"Permiso: {title[:200]}")
+
+                    def done(ans: str | None) -> None:
+                        from ottercode_cli.core_bridge import resolve_permission
+                        resolve_permission(self.state, ans or "d", pid)
+                        try:
+                            self.query_one("#in", Input).disabled = False
+                            self.action_focus_prompt()
+                        except Exception:
+                            pass
+
+                    self.push_screen(PermModal(title), done)
+                elif name == "system":
+                    t = str(data.get("text") or "")
                     if t:
                         self._chat().write_line(t[:500])
             except Exception:

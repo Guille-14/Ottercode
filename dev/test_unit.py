@@ -216,6 +216,66 @@ def test_openai_keeps_messages():
 
 
 
+def test_cli_version_matches_app():
+    from ottercode_cli import __version__
+    from backend.config import APP_VERSION
+    assert __version__ == APP_VERSION == "3.0.0"
+
+
+def test_compact_history_keeps_errors():
+    from ottercode_cli.sessions import compact_history
+    msgs = [{"role": "user", "content": f"n{i}"} for i in range(20)]
+    msgs[3] = {"role": "assistant", "content": "Traceback: FileNotFoundError: /tmp/x.py"}
+    out = compact_history(msgs, tail_n=6)
+    blob = " ".join(m["content"] for m in out)
+    assert "FileNotFoundError" in blob
+    assert len(out) < len(msgs)
+
+
+def test_resolve_permission_sets_session():
+    from ottercode_cli.core_bridge import CliState, resolve_permission
+    from backend.engine import PENDING_PERMISSIONS, PERMISSION_RESPONSES
+    import threading
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        st = CliState(workdir=Path(d), model="m", session_id="s", task_id="s")
+        pid = "perm-test"
+        PENDING_PERMISSIONS[pid] = threading.Event()
+        st.last_perm = {"id": pid}
+        resolve_permission(st, "s", pid)
+        assert st.session_allow is True
+        assert PERMISSION_RESPONSES.get(pid) is True
+        assert PENDING_PERMISSIONS[pid].is_set()
+        PENDING_PERMISSIONS.pop(pid, None)
+        PERMISSION_RESPONSES.pop(pid, None)
+
+
+def test_todo_and_reject_no_code():
+    from ottercode_cli.core_bridge import CliState, discard_pending_plan, todo_snapshot
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d)
+        (p / ".otter_todo.json").write_text('[{"content":"a","status":"pending"},{"content":"b","status":"done"}]')
+        (p / "index.html").write_text("<html>")
+        st = CliState(workdir=p, model="m", session_id="s", task_id="s")
+        snap = todo_snapshot(st)
+        assert snap["total"] == 2 and snap["done"] == 1
+        discard_pending_plan(st)
+        assert not (p / ".otter_todo.json").exists()
+        assert (p / "index.html").read_text() == "<html>"
+
+
+def test_status_markup_zinc():
+    from ottercode_cli.tui import _status_markup
+    s = _status_markup({
+        "model": "qwen", "role": "router", "ctx_used": 1, "ctx_tot": 10,
+        "vram_used": 1, "vram_tot": 8, "sandbox": "off", "mcp": False,
+        "perms": "ASK", "workdir": ".", "session": "x",
+        "todo_done": 1, "todo_total": 3,
+    })
+    assert "[router]" in s and "1/3" in s
+    assert "cyan" not in s and "green" not in s and "#86efac" not in s
+
+
 def test_truncated_tool_name():
     from backend.ollama import _truncated_tool_name
     err = 'invalid tool call arguments for "write_file": unexpected end of JSON input'

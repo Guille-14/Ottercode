@@ -4,7 +4,10 @@ from __future__ import annotations
 import os
 from typing import Callable, Optional
 
-from ottercode_cli.core_bridge import CliState, rag_query, read_file, run_prompt, sandbox_run, status_blob, tree
+from ottercode_cli.core_bridge import (
+    CliState, discard_pending_plan, mcp_panel, rag_query, read_file, run_prompt,
+    sandbox_run, status_blob, todo_snapshot, tree,
+)
 from ottercode_cli.sessions import list_sessions, load_session
 from ottercode_cli.slash import SLASH_HELP, SlashCmd, parse_slash
 
@@ -59,11 +62,33 @@ def _handle_slash(state: CliState, cmd: SlashCmd, printer: PrintFn) -> bool:
         printer(state.pending_diff or "(sin diff pendiente)")
         return True
     if n == "reject":
+        discard_pending_plan(state)
         state.pending_diff = ""
-        printer("Diff descartado (no se revierten archivos ya escritos; usa git).")
+        printer("Plan rechazado. Ningún archivo de código se ha escrito.")
         return True
     if n == "apply":
-        printer("Los diffs de edit_file ya se aplican en disco al ejecutarse la tool. Nada extra.")
+        snap = todo_snapshot(state)
+        if snap["total"] == 0 and not state.awaiting_plan:
+            printer("No hay plan pendiente (todo_write).")
+            return True
+        state.plan_approved = True
+        state.awaiting_plan = False
+        printer("Plan aprobado. Ejecutando…")
+        run_prompt(
+            state,
+            "El usuario APROBÓ el plan (todo_read). Ejecuta los pasos ahora con "
+            "edit_file/write_file. No regeneres el plan.",
+            None,
+        )
+        return True
+    if n == "todo":
+        snap = todo_snapshot(state)
+        if not snap["items"]:
+            printer("(plan vacío)")
+            return True
+        printer(f"Todo: {snap['done']}/{snap['total']} completados")
+        for t in snap["items"]:
+            printer(f"[{t.get('status')}] {t.get('content')}")
         return True
     if n == "run" and a:
         printer(sandbox_run(state, a))
@@ -109,7 +134,7 @@ def _handle_slash(state: CliState, cmd: SlashCmd, printer: PrintFn) -> bool:
         printer(f"ASK={os.environ.get('OTTERCODE_ASK_PERMISSIONS','1')} yolo={state.yolo}")
         return True
     if n == "mcp":
-        printer(status_blob(state))
+        printer(mcp_panel())
         return True
     if n == "tools":
         import tools as _tools

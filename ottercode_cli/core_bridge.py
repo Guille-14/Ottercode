@@ -15,7 +15,7 @@ from backend.config import DEFAULT_MODEL, NUM_CTX_DEFAULT, WORKSPACE_ROOT
 from backend.prompts import build_chat_prompt
 from backend.runstate import OtterRun
 from backend.turn import run_agent_turn
-from ottercode_cli.sessions import new_session_id, save_session
+from ottercode_cli.sessions import compact_history, new_session_id, save_session
 
 
 EventCb = Callable[[str, Dict[str, Any]], None]
@@ -45,6 +45,12 @@ class CliState:
     ctx_used: int = 0
     current_run: Any = None
     busy: bool = False
+    session_allow: bool = False
+    awaiting_plan: bool = False
+    plan_approved: bool = False
+    last_role: str = "especialista"
+    last_perm: Dict[str, Any] = field(default_factory=dict)
+    last_compact: str = ""
 
 
 def default_workdir() -> Path:
@@ -76,6 +82,11 @@ def make_run(state: CliState, task: str, system_inject: str = "") -> OtterRun:
         num_ctx=NUM_CTX_DEFAULT,
         continue_task=state.task_id if state.messages else "",
     )
+    run._session_allow = bool(state.session_allow)
+    run.plan_gate = not state.plan_approved
+    run.plan_approved = bool(state.plan_approved)
+    if state.messages:
+        run.messages = compact_history(list(state.messages))
     return run
 
 
@@ -117,18 +128,99 @@ def abort_run(state: CliState) -> bool:
     return True
 
 
-def _grant_perm(data: Dict[str, Any]) -> None:
-    """La web tiene diálogo; el CLI no puede esperar 300s. Concede el permiso."""
-    pid = str(data.get("id") or "")
-    if not pid:
-        return
+def resolve_permission(state: CliState, decision: str, perm_id: str = "") -> bool:
+    """a=aprobar, d=denegar, s=siempre esta sesión. Despierta el wait del motor."""
+    pid = perm_id or str((state.last_perm or {}).get("id") or "")
+    raw = (decision or "").strip().lower()
+    allow = raw in ("a", "s", "y", "yes", "si", "sí", "always", "aprobar", "1")
+    always = raw in ("s", "always", "siempre")
+    if always:
+        state.session_allow = True
+        if state.current_run is not None:
+            try:
+                state.current_run._session_allow = True
+            except Exception:
+                pass
     try:
         from backend.engine import PENDING_PERMISSIONS, PERMISSION_RESPONSES
-        PERMISSION_RESPONSES[pid] = True
-        ev = PENDING_PERMISSIONS.get(pid)
-        if ev is not None:
-            ev.set()
+        if pid:
+            PERMISSION_RESPONSES[pid] = allow
+            ev = PENDING_PERMISSIONS.get(pid)
+            if ev is not None:
+                ev.set()
     except Exception:
+        pass
+    return allow
+
+
+def _looks_like_mission(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if len(t) > 80:
+        return True
+    keys = (
+        "implementa", "crea", "escribe", "refactor", "html", "css", "app",
+        "web", "archivo", "proyecto", "página", "pagina", "fix", "bug",
+    )
+    return any(k in t for k in keys)
+
+
+_PLAN_TOOLS = {
+    "todo_write", "todo_read", "tree", "read_file", "list_dir",
+    "grep_search", "glob_files", "finalizar",
+}
+
+
+def todo_snapshot(state: CliState) -> Dict[str, Any]:
+    p = state.workdir / ".otter_todo.json"
+    items: List[Dict[str, Any]] = []
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                items = [x for x in data if isinstance(x, dict)]
+        except (json.JSONDecodeError, OSError):
+            items = []
+    done = sum(1 for t in items if str(t.get("status") or "").lower() in ("done", "completed", "completado"))
+    return {"items": items, "done": done, "total": len(items)}
+
+
+def mcp_panel() -> str:
+    try:
+        import mcp_client
+        mgr = mcp_client.get_mcp_manager()
+        ready = False
+        try:
+            ready = bool(mcp_client.mcp_loop.is_ready())
+        except Exception:
+            ready = bool(mgr.is_available)
+        lines = [f"mcp_ready={ready}"]
+        sessions = getattr(mgr, "sessions", {}) or {}
+        if not sessions:
+            lines.append("(sin servidores en mcp_servers.json)")
+        for name, sess in sessions.items():
+            conn = (getattr(mgr, "_connections", {}) or {}).get(name)
+            tools_n = list(conn.tools) if conn else [t.get("name") for t in (getattr(sess, "tools", None) or [])]
+            ok = bool(conn and conn.connected) if conn else bool(getattr(sess, "_connected", False))
+            lines.append(f"- {name}: {'conectado' if ok else 'off'}")
+            for t in tools_n[:40]:
+                lines.append(f"    · {t}")
+        catalog = list((getattr(mgr, "tools_catalog", {}) or {}).keys())
+        if catalog and not any("·" in ln for ln in lines):
+            for t in catalog[:40]:
+                lines.append(f"    · {t}")
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"mcp error: {exc}"
+
+
+def discard_pending_plan(state: CliState) -> None:
+    state.awaiting_plan = False
+    state.plan_approved = False
+    p = state.workdir / ".otter_todo.json"
+    try:
+        if p.is_file():
+            p.unlink()
+    except OSError:
         pass
 
 
@@ -146,25 +238,54 @@ def friendly_error(exc: BaseException) -> str:
 
 
 def run_prompt(state: CliState, text: str, on_event: Optional[EventCb] = None) -> str:
-    """Un turno de chat usando el mismo motor que la web. Nunca deja el hang de permisos."""
+    """Un turno de chat usando el mismo motor que la web."""
     from backend.runstate import AbortRequested
     try:
         from backend.ollama import resolve_coder_model
         state.model = resolve_coder_model(state.model) or state.model
     except Exception:
         pass
+    try:
+        from backend.router import route, ROUTER_MODEL, is_router_model
+        dec = route(text)
+        if dec.get("tipo") == "directo":
+            state.last_role = "router"
+            if is_router_model(state.model) or True:
+                pass
+        else:
+            state.last_role = "especialista"
+        _ = ROUTER_MODEL
+    except Exception:
+        state.last_role = "especialista"
     run = make_run(state, text)
     state.current_run = run
     state.busy = True
     collected: List[str] = []
     prompt = ""
+    only = None
+    extra = ""
+    if not state.plan_approved and _looks_like_mission(text) and not state.yolo:
+        only = set(_PLAN_TOOLS)
+        extra = (
+            "\n\nPLAN OBLIGATORIO (todo_write, mismo sistema que la web): "
+            "ANTES de cualquier write_file/edit_file, guarda un plan de ≥3 pasos "
+            "con todo_write y finaliza. El usuario usará /apply, /reject o texto "
+            "libre para editar el plan. PROHIBIDO escribir archivos de código ahora."
+        )
     try:
-        prompt = build_chat_prompt(run, task_text=text)
-        for name, data in iter_sse(run_agent_turn(run, "agent", 1, prompt)):
+        prompt = build_chat_prompt(run, task_text=text) + extra
+        gen = run_agent_turn(run, "agent", 1, prompt, only_tools=only)
+        for name, data in iter_sse(gen):
             if name == "perm_request":
-                _grant_perm(data)
+                state.last_perm = dict(data or {})
+                if state.yolo or state.session_allow:
+                    resolve_permission(state, "s", str(data.get("id") or ""))
                 if on_event:
-                    on_event(name, data)
+                    try:
+                        on_event("permission_requested", data)
+                        on_event("perm_request", data)
+                    except Exception:
+                        pass
                 continue
             if on_event:
                 try:
@@ -179,15 +300,22 @@ def run_prompt(state: CliState, text: str, on_event: Optional[EventCb] = None) -
                 state.pending_path = str(data.get("path") or "")
             if name == "file_updated":
                 state.pending_path = str(data.get("path") or state.pending_path)
-            if name == "tool_result" and not data.get("ok"):
-                state.last_error = str(data.get("output") or "")[:2000]
+            if name == "tool_result":
+                if not data.get("ok"):
+                    state.last_error = str(data.get("output") or "")[:2000]
+                if str(data.get("tool") or "") == "todo_write" and data.get("ok"):
+                    snap = todo_snapshot(state)
+                    if snap["total"] >= 2 and not state.plan_approved:
+                        state.awaiting_plan = True
             if name == "system":
                 t = str(data.get("text") or "")
-                if t and on_event:
-                    try:
-                        on_event("system", data)
-                    except Exception:
-                        pass
+                if "compact" in t.lower() or "compactación" in t.lower() or "🗜️" in t:
+                    state.last_compact = t
+                    if on_event:
+                        try:
+                            on_event("system", {"text": "[contexto compactado] " + t[:240]})
+                        except Exception:
+                            pass
     except AbortRequested:
         if on_event:
             try:
@@ -305,8 +433,11 @@ def cockpit(state: CliState) -> Dict[str, Any]:
     ctx_tot = int(NUM_CTX_DEFAULT)
     ctx_used = int(state.ctx_used or 0)
     yolo = state.yolo or ask in ("0", "false")
+    snap = todo_snapshot(state)
+    role = state.last_role if state.last_role in ("router", "especialista") else "especialista"
     return {
         "model": state.model,
+        "role": role,
         "ctx_used": ctx_used,
         "ctx_tot": ctx_tot,
         "vram_used": used_gb,
@@ -318,6 +449,8 @@ def cockpit(state: CliState) -> Dict[str, Any]:
         "perms": "YOLO" if yolo else "ASK",
         "session": state.session_id,
         "ollama": os.environ.get("OTTERCODE_OLLAMA", "http://127.0.0.1:11434"),
+        "todo_done": snap["done"],
+        "todo_total": snap["total"],
     }
 
 

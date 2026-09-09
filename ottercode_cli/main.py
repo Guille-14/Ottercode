@@ -12,6 +12,7 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--tui", action="store_true", help="forzar TUI")
     p.add_argument("--plain", action="store_true", help="REPL sin TUI")
     p.add_argument("--workdir", default="", help="workspace (default: cwd)")
+    p.add_argument("--version", action="store_true", help="versión (APP_VERSION)")
     opt, rest = p.parse_known_args(argv)
     cmd = rest[0] if rest else "chat"
     pos = rest[1:] if rest else []
@@ -53,11 +54,6 @@ def _repl(state, first: str = "") -> int:
                 return 0
         if not line:
             continue
-        sl = parse_slash(line)
-        if sl:
-            handle_slash(state, sl, print)
-            continue
-
         def on_ev(name: str, data: dict) -> None:
             if name == "token":
                 sys.stdout.write(str(data.get("token") or ""))
@@ -67,6 +63,28 @@ def _repl(state, first: str = "") -> int:
             elif name == "tool_result":
                 ok = "ok" if data.get("ok") else "err"
                 print(f"\n[{ok}] {(str(data.get('output') or ''))[:400]}")
+            elif name == "permission_requested":
+                tool = data.get("tool") or data.get("title") or "herramienta"
+                print(f"\nPermiso: {tool}  {str(data.get('args') or '')[:200]}")
+                try:
+                    ans = input("Aprobar (a) / Denegar (d) / Siempre esta sesión (s): ")
+                except (EOFError, KeyboardInterrupt):
+                    ans = "d"
+                from ottercode_cli.core_bridge import resolve_permission
+                resolve_permission(state, ans, str(data.get("id") or ""))
+            elif name == "system":
+                t = str(data.get("text") or "")
+                if t:
+                    print(f"\n{t}")
+
+        sl = parse_slash(line)
+        if sl:
+            handle_slash(state, sl, print)
+            continue
+        if getattr(state, "awaiting_plan", False) and not line.startswith("/"):
+            print("Feedback al plan (aún sin escribir archivos). /apply o /reject.")
+            run_prompt(state, "Edita el plan (todo_write) según este feedback. No escribas código:\n" + line, on_ev)
+            continue
 
         print()
         try:
@@ -79,6 +97,10 @@ def _repl(state, first: str = "") -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse(argv)
+    if getattr(args, "version", False):
+        from ottercode_cli import __version__
+        print(__version__)
+        return 0
     from ottercode_cli.core_bridge import new_state, sandbox_run
     from ottercode_cli.sessions import list_sessions, load_session
     from ottercode_cli.slash import SLASH_HELP

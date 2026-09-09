@@ -16,8 +16,9 @@ SLASH_HELP = """/help            esta ayuda
 /open <archivo>  leer archivo
 /edit <archivo>  enfocar edición
 /diff            cambios pendientes
-/apply           aplicar último parche (confirmación)
-/reject          descartar parche
+/apply           aprobar el plan (todo_write) y ejecutar
+/reject          descartar el plan; no escribe código
+/todo            plan de misión (pasos done/pending)
 /run <cmd>       comando en sandbox
 /test            pytest/npm test
 /explain         explicar último error
@@ -28,7 +29,7 @@ SLASH_HELP = """/help            esta ayuda
 /resume [id]     reanudar sesión
 /yolo            permisos off
 /permissions     ASK_PERMISSIONS
-/mcp             estado MCP
+/mcp             servidores MCP y sus herramientas
 /tools           skills
 /rag <query>     búsqueda semántica
 /config          variables OTTERCODE_*

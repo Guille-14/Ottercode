@@ -76,7 +76,8 @@ def _loop(stdscr, state, seed: str) -> int:
         bar = lambda f: "#" * int(f * 16) + "-" * (16 - int(f * 16))
         return [
             "ESTADO",
-            f"Modelo  {c['model']}",
+            f"Modelo  [{c.get('role') or 'especialista'}] {c['model']}",
+            f"Todo    {int(c.get('todo_done') or 0)}/{int(c.get('todo_total') or 0)} completados",
             f"Ctx     {c['ctx_used']}/{c['ctx_tot']} ({ctx_f*100:.0f}%)",
             bar(ctx_f),
             f"VRAM    {c['vram_used']:.1f}/{c['vram_tot']:.1f} GB",

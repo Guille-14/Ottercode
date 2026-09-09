@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ottercode"
-version = "3.0.0"
+dynamic = ["version"]
 description = "Orquestador local de agentes autónomos con Ollama y MCP"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -29,6 +29,9 @@ dev = ["pytest>=7.0", "mypy", "bandit"]
 
 [project.scripts]
 ottercode = "ottercode_cli.main:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "backend.config.APP_VERSION"}
 
 [tool.setuptools]
 package-dir = {"" = "."}

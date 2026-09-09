@@ -421,6 +421,21 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                             run._turn_tools.add(event["name"])
                             if event["name"] == "finalizar":
                                 run._native_done = True
+                            if (event.get("ok") and event["name"] == "todo_write"
+                                    and getattr(run, "plan_gate", False)
+                                    and not getattr(run, "plan_approved", False)):
+                                n_items = 0
+                                try:
+                                    _td = json.loads((Path(run.workdir) / ".otter_todo.json").read_text(encoding="utf-8"))
+                                    n_items = len(_td) if isinstance(_td, list) else 0
+                                except Exception:
+                                    n_items = 0
+                                if n_items >= 2:
+                                    run._awaiting_plan = True
+                                    run._native_done = True
+                                    yield sse(SseEvent.system, {
+                                        "text": "📋 Plan listo. Escribe /apply, /reject o feedback. Aún no se ha escrito código.",
+                                    })
                 # Native FC ya ejecutó las tools: no reparsear JSON/Hermes (doble dispatch).
                 if getattr(run, "_native_done", False):
                     break
@@ -665,6 +680,20 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         if result.get("ok") and tool_name == "todo_write":
             run._todo_idle = 0
             yield sse(SseEvent.system, {"text": "📋 Todo actualizado (persistido en disco)."})
+            if getattr(run, "plan_gate", False) and not getattr(run, "plan_approved", False):
+                n_items = 0
+                try:
+                    _td = json.loads((Path(run.workdir) / ".otter_todo.json").read_text(encoding="utf-8"))
+                    n_items = len(_td) if isinstance(_td, list) else 0
+                except Exception:
+                    n_items = 0
+                if n_items >= 2:
+                    run._awaiting_plan = True
+                    yield sse(SseEvent.system, {
+                        "text": "📋 Plan listo. Escribe /apply, /reject o feedback para editarlo. "
+                                "Aún no se ha escrito código.",
+                    })
+                    break
         if result.get("ok") and tool_name in ("write_file", "edit_file", "apply_patch"):
             _out = str(result.get("output") or "")
             if "```diff" in _out:
