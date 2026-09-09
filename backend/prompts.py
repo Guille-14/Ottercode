@@ -194,11 +194,12 @@ def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 def extract_tool_call(text: str) -> Optional[Dict[str, Any]]:
     """Encuentra la primera llamada de herramienta válida (objeto O array).
 
-    Robustez: primero los bloques ```json (objeto o lista, los formatos que
-    exigen los prompts) y, si no hay, un escaneo con json.JSONDecoder.raw_decode
-    sobre cada '{' y cada '[' (las llaves dentro de cadenas de código NO
-    confunden al parser JSON real). Devuelve SIEMPRE {tool, arguments}.
+    Robustez: primero Hermes/XML, luego bloques ```json y raw_decode.
+    Devuelve SIEMPRE {tool, arguments}.
     """
+    hermes = _hermes_tool_call(text or "")
+    if hermes:
+        return hermes
     for match in _FENCED_TOOL_RE.finditer(text):
         start = match.end() - 1
         try:

@@ -140,19 +140,6 @@ def _run_native_tool(run: Any, agent_id: str, iteration: int, executor: Any, cal
         yield {"kind": "result", "name": name, "ok": False, "output": msg}
         return {"ok": False, "output": msg}
     args = alias_args(name, args)
-    if name == "write_file":
-        fp = str(args.get("filepath") or args.get("path") or "").strip()
-        try:
-            cand = (run.workdir / fp) if fp else None
-            if cand is not None and cand.is_file() and cand.stat().st_size > 80:
-                msg = (
-                    f"ACCESO DENEGADO: «{fp}» ya existe. Usa edit_file o append_file; "
-                    "write_file lo regeneraría desde cero."
-                )
-                yield {"kind": "result", "name": name, "ok": False, "output": msg}
-                return {"ok": False, "output": msg}
-        except OSError:
-            pass
     if _needs_permission(run, name, args):
         perm_id = str(uuid.uuid4())
         PENDING_PERMISSIONS[perm_id] = threading.Event()

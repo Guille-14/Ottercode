@@ -89,7 +89,8 @@ def _active_num_ctx(run: Any) -> int:
 
 def _compact_threshold(run: Any) -> int:
     num_ctx = _active_num_ctx(run)
-    return max(512, int(num_ctx * 0.55))
+    # 75 % de num_ctx: deja margen de generación. OTTERCODE_COMPACT_EVERY en loop.
+    return max(512, int(num_ctx * 0.75))
 
 
 def _call_token_estimate(run: Any, system_prompt: str, prompt: str = "") -> int:
@@ -292,7 +293,9 @@ def _maybe_compact_messages(run: Any, agent_id: str, system_prompt: str,
         ev = _preflight_eval(run, system_prompt, prompt)
         if getattr(run, "_compact_blocked", False) and not force:
             return None
-        if not force and not ev.get("over"):
+        every = int(os.environ.get("OTTERCODE_COMPACT_EVERY", "0") or "0")
+        periodic = every > 0 and int(getattr(run, "_llm_calls", 0) or 0) % every == 0
+        if not force and not ev.get("over") and not periodic:
             return None
         msgs = [_clip_message(m) for m in (run.messages or [])]
         if len(msgs) < 3 and not force:

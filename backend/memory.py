@@ -101,18 +101,25 @@ _memory_llm_logged = False
 
 
 def pick_memory_llm_model() -> str:
-    """Modelo ≤3B para extraer memoria. Vacío = desactivar LLM (regex)."""
+    """Consulta GET /api/tags y elige un modelo 1b/1.5b/3b/3.8b. Vacío = regex."""
     global _memory_llm_logged
     if os.environ.get("OTTERCODE_MEMORY_LLM", "1").strip().lower() in ("0", "false", "no"):
         return ""
+    names: List[str] = []
     try:
-        from backend.ollama import fetch_models
-        names = fetch_models() or []
+        from backend.config import OLLAMA_BASE_URL
+        resp = requests.get(f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags", timeout=5)
+        resp.raise_for_status()
+        names = [str(m.get("name") or "") for m in (resp.json().get("models") or []) if m.get("name")]
     except Exception:
-        names = []
+        try:
+            from backend.ollama import fetch_models
+            names = fetch_models() or []
+        except Exception:
+            names = []
     hit = ""
     for n in names:
-        if _SMALL_RX.search(str(n).replace("B", "b")):
+        if _SMALL_RX.search(str(n).lower()):
             hit = str(n)
             break
     if not hit and not _memory_llm_logged:

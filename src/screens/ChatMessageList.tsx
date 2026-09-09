@@ -348,7 +348,7 @@ const SegBubble = memo(function SegBubble({
                             {t.ok ? '✓ OK' : '✕'}
                           </span>
                         </div>
-                        {t.output && t.output.includes('```diff') ? (
+                        {t.output && (t.output.includes('```diff') || t.output.includes('\n--- ') || t.output.startsWith('--- ')) ? (
                           <div className="mt-1.5">
                             <DiffView text={t.output} />
                           </div>

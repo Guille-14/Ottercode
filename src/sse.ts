@@ -18,6 +18,9 @@ export type SseName =
   | 'agent_injected'
   | 'loop_iter'
   | 'loop_exhausted'
+  | 'diff'
+  | 'perm_request'
+  | 'ctx_hint'
 
 export interface SseEvent {
   name: SseName | string
