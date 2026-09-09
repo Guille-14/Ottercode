@@ -42,6 +42,16 @@ def test_session_roundtrip(tmp_path, monkeypatch):
     assert any(r["id"] == "abc" for r in rows)
 
 
+def test_abort_run_noop():
+    from ottercode_cli.core_bridge import CliState, abort_run
+    from pathlib import Path
+    st = CliState(workdir=Path("."), model="x", session_id="s", task_id="t")
+    assert abort_run(st) is False
+    st.current_run = type("R", (), {"aborted": False})()
+    assert abort_run(st) is True
+    assert st.current_run.aborted is True
+
+
 def test_vram_usage_tuple():
     from ottercode_cli.core_bridge import vram_usage
     u, t = vram_usage()

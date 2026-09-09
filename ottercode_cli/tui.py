@@ -1,7 +1,9 @@
 """TUI OpenCode-like. Textual si hay; si no, curses (stdlib)."""
 from __future__ import annotations
 
+import time
 from datetime import datetime
+from pathlib import Path
 from typing import List
 
 from ottercode_cli.slash import SLASH_HELP, parse_slash
@@ -12,7 +14,7 @@ try:
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical, VerticalScroll
     from textual.screen import ModalScreen
-    from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
+    from textual.widgets import DirectoryTree, Footer, Header, Input, Label, ListItem, ListView, Static
     HAS_TEXTUAL = True
 except ImportError:
     HAS_TEXTUAL = False
@@ -87,7 +89,9 @@ if HAS_TEXTUAL:
         #col-side { width: 38; }
         .panel-title { color: #64748b; text-style: bold; padding: 0 1; height: 1; }
         #files { height: 1fr; border: solid #1e293b; padding: 0 1; color: #94a3b8; }
+        DirectoryTree { height: 1fr; border: solid #1e293b; background: #0b1220; color: #94a3b8; }
         #chat { height: 1fr; border: solid #1e293b; padding: 1 1; color: #e2e8f0; }
+        #ready { dock: right; width: 12; color: #86efac; text-align: right; padding: 0 1; }
         #composer { dock: bottom; height: auto; }
         #prompt-wrap { height: auto; border: solid #1e293b; }
         Input { background: #0b1220; border: none; color: #e8edf5; }
@@ -96,14 +100,16 @@ if HAS_TEXTUAL:
         #diff { height: 1fr; border: solid #1e293b; padding: 1 1; color: #86efac; }
         """
         BINDINGS = [
-            Binding("ctrl+c", "quit", "Salir"),
-            Binding("ctrl+q", "quit", "Salir", show=False),
+            Binding("ctrl+c", "interrupt", "abortar"),
+            Binding("ctrl+q", "quit", "Salir"),
+            Binding("escape", "interrupt", "abortar", show=False),
             Binding("f1", "help", "help"),
             Binding("f2", "pick_model", "modelo"),
             Binding("f3", "refresh_files", "archivos"),
             Binding("f4", "show_diff", "diff"),
             Binding("ctrl+s", "focus_prompt", "prompt"),
             Binding("ctrl+y", "yolo", "YOLO"),
+            Binding("tab", "slash_complete", "slash", show=False),
         ]
 
         def __init__(self, state, seed: str = "") -> None:
@@ -117,6 +123,7 @@ if HAS_TEXTUAL:
             ]
             self.busy = False
             self._stream = ""
+            self._last_paint = 0.0
 
         def compose(self) -> ComposeResult:
             from ottercode_cli.core_bridge import cockpit
@@ -124,7 +131,7 @@ if HAS_TEXTUAL:
             with Horizontal():
                 with Vertical(id="col-files"):
                     yield Static("ARCHIVOS", classes="panel-title")
-                    yield VerticalScroll(Static("workspace", id="files", markup=False))
+                    yield DirectoryTree(str(self.state.workdir), id="tree")
                 with Vertical(id="col-agent"):
                     yield Static("AGENTE", classes="panel-title")
                     yield VerticalScroll(Static("\n".join(self._log), id="chat", markup=False))
@@ -147,21 +154,60 @@ if HAS_TEXTUAL:
             self.action_refresh_files()
             self.sub_title = "Ollama local"
             self.query_one("#in", Input).focus()
+            self.set_interval(2.0, self._refresh_status)
             if self.seed:
                 self.call_after_refresh(lambda: self._dispatch(self.seed))
+
+        def _set_ready(self, text: str) -> None:
+            try:
+                self.query_one("#ready", Static).update(text)
+            except Exception:
+                pass
 
         def _refresh_status(self) -> None:
             from ottercode_cli.core_bridge import cockpit
             self.query_one("#status", Static).update(_status_markup(cockpit(self.state)))
             self.sub_title = f"Ollama local · {self.state.model}"
+            self._set_ready("generando" if self.busy else "listo")
 
         def action_refresh_files(self) -> None:
-            from ottercode_cli.core_bridge import tree
             try:
-                body = tree(self.state)[:8000] or "(vacio)"
+                self.query_one("#tree", DirectoryTree).reload()
+            except Exception:
+                pass
+
+        def on_directory_tree_file_selected(self, event) -> None:
+            path = getattr(event, "path", None) or getattr(event, "node", None)
+            p = Path(str(path))
+            try:
+                rel = p.relative_to(self.state.workdir)
+            except Exception:
+                rel = p
+            try:
+                from ottercode_cli.core_bridge import read_file
+                body = read_file(self.state, str(rel))[:4000]
             except Exception as exc:
                 body = str(exc)
-            self.query_one("#files", Static).update("workspace\n" + body)
+            self.query_one("#diff", Static).update(f"{rel}\n{body}")
+
+        def action_interrupt(self) -> None:
+            from ottercode_cli.core_bridge import abort_run
+            if self.busy and abort_run(self.state):
+                self._append("(abortado)")
+                self._set_ready("abortando")
+                return
+            if not self.busy:
+                self.exit()
+
+        def action_slash_complete(self) -> None:
+            inp = self.query_one("#in", Input)
+            v = inp.value
+            if not v.startswith("/"):
+                return
+            hits = [h for h in SLASH_HINTS if h.startswith(v)]
+            if hits:
+                inp.value = hits[0]
+                inp.cursor_position = len(inp.value)
 
         def action_help(self) -> None:
             self._append("\n" + SLASH_HELP)
@@ -207,15 +253,23 @@ if HAS_TEXTUAL:
                 return
             self._dispatch(line)
 
+        def _scroll_chat(self) -> None:
+            try:
+                self.query_one("#chat").parent.scroll_end(animate=False)
+            except Exception:
+                pass
+
         def _append(self, text: str) -> None:
             self._log.append(text)
             self._log = self._log[-80:]
             self.query_one("#chat", Static).update("\n".join(self._log)[-14000:])
+            self._scroll_chat()
 
         def _paint_stream(self) -> None:
             self.query_one("#chat", Static).update(
                 "\n".join(self._log) + "\n" + self._stream[-6000:]
             )
+            self._scroll_chat()
 
         def _dispatch(self, line: str) -> None:
             from ottercode_cli.commands import handle_slash
@@ -231,9 +285,13 @@ if HAS_TEXTUAL:
                     self.action_show_diff()
                 if sl.name in ("files", "open"):
                     self.action_refresh_files()
+                if sl.name == "clear":
+                    self._log = ["OtterCode Neo TUI"]
+                    self.query_one("#chat", Static).update(self._log[0])
                 self._refresh_status()
                 return
             self.busy = True
+            self._set_ready("generando")
             ts = datetime.now().strftime("%H:%M:%S")
             self._append(f"\n[{ts}] > {line}\n")
             self._stream = ""
@@ -242,7 +300,10 @@ if HAS_TEXTUAL:
         def _on_ev(self, name: str, data: dict) -> None:
             if name == "token":
                 self._stream += str(data.get("token") or "")
-                self._paint_stream()
+                now = time.monotonic()
+                if now - self._last_paint >= 0.05:
+                    self._last_paint = now
+                    self._paint_stream()
             elif name == "tool_call":
                 self.query_one("#diff", Static).update(f"tool {data.get('tool')}")
                 self._append(f"  {data.get('tool')}")
@@ -258,11 +319,13 @@ if HAS_TEXTUAL:
                 self.action_refresh_files()
 
         def _agent_done(self, acc: str, err: str) -> None:
+            self._paint_stream()
             if err:
                 self._append(f"error: {err}")
-            elif acc:
+            elif acc and acc not in "\n".join(self._log)[-8000:]:
                 self._append(acc[-8000:])
             self.busy = False
+            self._set_ready("listo")
             self._refresh_status()
             self.action_refresh_files()
             self.query_one("#in", Input).focus()

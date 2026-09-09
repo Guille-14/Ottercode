@@ -43,6 +43,8 @@ class CliState:
     learn_topic: str = ""
     messages: List[Dict[str, str]] = field(default_factory=list)
     ctx_used: int = 0
+    current_run: Any = None
+    busy: bool = False
 
 
 def default_workdir() -> Path:
@@ -97,27 +99,41 @@ def iter_sse(gen: Iterator[str]) -> Iterator[tuple[str, Dict[str, Any]]]:
                 yield name, data
 
 
+def abort_run(state: CliState) -> bool:
+    run = state.current_run
+    if run is None:
+        return False
+    run.aborted = True
+    return True
+
+
 def run_prompt(state: CliState, text: str, on_event: Optional[EventCb] = None) -> str:
     """Un turno de chat usando el mismo motor que la web."""
     run = make_run(state, text)
+    state.current_run = run
+    state.busy = True
     prompt = build_chat_prompt(run, task_text=text)
     collected: List[str] = []
-    for name, data in iter_sse(run_agent_turn(run, "agent", 1, prompt)):
-        if on_event:
-            on_event(name, data)
-        if name == "token":
-            tok = str(data.get("token") or "")
-            collected.append(tok)
-        if name == "diff":
-            state.pending_diff = str(data.get("diff") or "")
-            state.pending_path = str(data.get("path") or "")
-        if name == "file_updated":
-            state.pending_path = str(data.get("path") or state.pending_path)
-        if name == "tool_result" and not data.get("ok"):
-            state.last_error = str(data.get("output") or "")[:2000]
-        if name == "perm_request":
+    try:
+        for name, data in iter_sse(run_agent_turn(run, "agent", 1, prompt)):
             if on_event:
-                on_event("permission_requested", data)
+                on_event(name, data)
+            if name == "token":
+                tok = str(data.get("token") or "")
+                collected.append(tok)
+            if name == "diff":
+                state.pending_diff = str(data.get("diff") or "")
+                state.pending_path = str(data.get("path") or "")
+            if name == "file_updated":
+                state.pending_path = str(data.get("path") or state.pending_path)
+            if name == "tool_result" and not data.get("ok"):
+                state.last_error = str(data.get("output") or "")[:2000]
+            if name == "perm_request":
+                if on_event:
+                    on_event("permission_requested", data)
+    finally:
+        state.current_run = None
+        state.busy = False
     text_out = "".join(collected)
     state.ctx_used = min(NUM_CTX_DEFAULT, max(state.ctx_used, (len(prompt) + len(text_out)) // 4))
     state.messages.append({"role": "user", "content": text})

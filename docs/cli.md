@@ -17,9 +17,10 @@ ottercode chat
 python -m ottercode_cli chat
 ```
 
-TUI (si `pip install textual` o `.[cli]`): tres columnas como OpenCode —
-**archivos | agente | estado+diff**. F1 ayuda, **F2 modelo** (Ollama),
-F3 archivos, F4 diff, Ctrl+S prompt, Ctrl+Y YOLO. `/` autocompleta slash.
+TUI (Textual va en las deps; si falta, curses): tres columnas —
+**archivos | agente | estado+diff**. F1 ayuda, **F2 modelo**, F3 árbol,
+F4 diff, Tab completa `/`, Esc/Ctrl+C aborta generación, Ctrl+Y YOLO.
+Click un archivo del árbol para verlo en el panel de tools.
 
 ## Comandos
 
