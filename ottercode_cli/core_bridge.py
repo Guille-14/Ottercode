@@ -175,23 +175,34 @@ def rag_query(state: CliState, q: str) -> str:
     return str(tools.ToolExecutor(state.workdir).dispatch("semantic_search", {"query": q}).get("output") or "")
 
 
+_VRAM_CACHE: tuple[float, float, float] = (0.0, 8.0, 0.0)
+
+
 def vram_usage() -> tuple[float, float]:
-    """(used_gb, total_gb). nvidia-smi; fallback (0, 8)."""
+    """(used_gb, total_gb). nvidia-smi cacheado 4s para no congelar la TUI."""
+    global _VRAM_CACHE
+    now = time.monotonic()
+    used0, tot0, ts = _VRAM_CACHE
+    if now - ts < 4.0 and ts > 0:
+        return used0, tot0
     import subprocess
     try:
         out = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
-            timeout=2,
+            timeout=1,
             text=True,
         ).strip().splitlines()[0]
         used, total = [float(x.strip()) for x in out.split(",")[:2]]
-        return used / 1024.0, total / 1024.0
+        _VRAM_CACHE = (used / 1024.0, total / 1024.0, now)
+        return _VRAM_CACHE[0], _VRAM_CACHE[1]
     except Exception:
         try:
             from backend.config import VRAM_TOTAL_BYTES
-            return 0.0, max(VRAM_TOTAL_BYTES / (1024 ** 3), 1.0)
+            tot = max(VRAM_TOTAL_BYTES / (1024 ** 3), 1.0)
         except Exception:
-            return 0.0, 8.0
+            tot = 8.0
+        _VRAM_CACHE = (used0, tot, now)
+        return used0, tot
 
 
 def cockpit(state: CliState) -> Dict[str, Any]:
