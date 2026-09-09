@@ -8,6 +8,7 @@ from backend.runstate import OtterRun  # noqa: E402
 from backend.prompts import extract_json_object  # noqa: E402
 from backend.profiles import _delete_profile, _get_profile, _load_active_profile, _load_profiles, _save_active_profile, _save_profile  # noqa: E402
 from backend.ollama import _LlmSession, fetch_models, flush_all_vram, flush_vram, invalidate_models_cache, stream_llm  # noqa: E402
+from backend.ctx_bench import load_ctx_bench, stream_benchmark  # noqa: E402
 from backend.history import HISTORY, _append_session_event  # noqa: E402
 from backend.engine import run_task_stream  # noqa: E402
 from backend.db import get_session_detail, search_history  # noqa: E402
@@ -269,7 +270,12 @@ def api_flush(req: FlushRequest) -> JSONResponse:
 @router.get(Route.SETTINGS)
 def api_settings_get() -> Dict[str, Any]:
     import backend.settings as _s
-    return {"ok": True, "settings": _s.load_runtime_settings()}
+    from backend.ctx_bench import load_ctx_bench
+    return {
+        "ok": True,
+        "settings": _s.load_runtime_settings(),
+        "ctx_bench": load_ctx_bench(),
+    }
 
 
 class SettingsRequest(BaseModel):
@@ -321,6 +327,41 @@ _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 class ModelNameRequest(BaseModel):
     model: str = Field(min_length=1, max_length=120)
+
+
+class CtxBenchRequest(BaseModel):
+    model: str = ""
+
+
+class CtxApplyRequest(BaseModel):
+    num_ctx: int = Field(ge=2048, le=131072)
+
+
+@router.post(Route.CTX_BENCH)
+def api_ctx_bench(req: CtxBenchRequest) -> StreamingResponse:
+    """B1 · Recalibrar num_ctx (SSE, GPU exclusiva)."""
+    model = (req.model or "").strip() or DEFAULT_MODEL
+    if not RUN_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Hay una misión en curso: aborta o espera para calibrar.")
+
+    def gen() -> Iterator[str]:
+        try:
+            yield from stream_benchmark(model)
+        except Exception as exc:  # noqa: BLE001
+            yield sse(SseEvent.task_error, {"message": f"Calibración: {exc}"})
+        finally:
+            RUN_LOCK.release()
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@router.post(Route.CTX_BENCH_APPLY)
+def api_ctx_bench_apply(req: CtxApplyRequest) -> Dict[str, Any]:
+    import backend.settings as _s
+    saved = _s.save_runtime_settings({"num_ctx": int(req.num_ctx)})
+    for run in list(ACTIVE_RUN.values()):
+        run.num_ctx = int(req.num_ctx)
+    return {"ok": True, "num_ctx": int(req.num_ctx), "settings": saved}
 
 
 class ModelCreateRequest(BaseModel):

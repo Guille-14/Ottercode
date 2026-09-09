@@ -64,7 +64,7 @@ def load_runtime_settings() -> Dict[str, Any]:
             data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 for k, v in data.items():
-                    if k in merged:
+                    if k in merged or k in ("ctx_speed_floor",):
                         merged[k] = v
     except (json.JSONDecodeError, OSError):
         pass

@@ -71,6 +71,8 @@ class Route:
     MCP = "/api/mcp"
     COMPACT = "/api/compact"
     TODOS = "/api/todos"
+    CTX_BENCH = "/api/ctx-bench"
+    CTX_BENCH_APPLY = "/api/ctx-bench/apply"
 
 
 class SseEvent(Enum):
@@ -109,6 +111,7 @@ class SseEvent(Enum):
     # Chat specific
     session_id = auto()
     perm_request = auto()
+    ctx_hint = auto()
 
 def sse(event: SseEvent, data: Dict[str, Any]) -> str:
     """Formatea un evento Server-Sent Events usando el enum centralizado."""

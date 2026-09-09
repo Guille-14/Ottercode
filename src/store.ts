@@ -30,6 +30,15 @@ interface UiState {
   missionError: string | null
   studio: StudioTarget | null
   pendingPerm: { id: string; tool: string; title: string } | null
+  ctxHint: {
+    compact_hits: number
+    current_ctx?: number
+    next_ctx?: number
+    current_tps?: number
+    next_tps?: number
+    has_bench?: boolean
+    recommended?: number
+  } | null
   focus: boolean
   composerDraft: string
   model: string
@@ -72,6 +81,8 @@ interface UiState {
   setComposerDraft: (d: string) => void
   clearComposerDraft: () => void
   approvePerm: (id: string, allow: boolean, always?: boolean) => Promise<void>
+  dismissCtxHint: () => void
+  applyCtxHint: () => Promise<void>
 }
 
 let seq = 0
@@ -101,6 +112,7 @@ export const useUi = create<UiState>()(
       missionError: null,
       studio: null,
       pendingPerm: null,
+      ctxHint: null,
       focus: false,
       composerDraft: '',
       model: 'qwen3.5:4b',
@@ -178,6 +190,15 @@ export const useUi = create<UiState>()(
       toggleFocus: () => set((s) => ({ focus: !s.focus })),
       setComposerDraft: (d) => set({ composerDraft: d }),
       clearComposerDraft: () => set({ composerDraft: '' }),
+      dismissCtxHint: () => set({ ctxHint: null }),
+      applyCtxHint: async () => {
+        const h = get().ctxHint
+        const nxt = Number(h?.next_ctx || h?.recommended || 0)
+        set({ ctxHint: null })
+        if (nxt >= 2048) {
+          await api.applyCtx(nxt).catch(() => undefined)
+        }
+      },
       approvePerm: async (id, allow, always) => {
         set({ pendingPerm: null })
         await fetchWithAuth('/api/approve', {
@@ -265,6 +286,9 @@ export const useUi = create<UiState>()(
             if (ev.name === 'perm_request') {
               set({ pendingPerm: ev.data as any })
               continue
+            }
+            if (ev.name === 'ctx_hint') {
+              set({ ctxHint: ev.data as UiState['ctxHint'] })
             }
             if (ev.name === 'token') {
               pushTokenTime()

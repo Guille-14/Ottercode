@@ -244,7 +244,10 @@ export const api = {
   status: () => j<Status>(fetchWithAuth(`${BASE}/status`)),
   pulse: () => j<Pulse>(fetchWithAuth(`${BASE}/pulse`)),
   system: () => j<SystemStats>(fetchWithAuth(`${BASE}/system`)),
-  settings: () => j<{ ok: boolean; settings: Record<string, unknown> }>(fetchWithAuth(`${BASE}/settings`)),
+  settings: () =>
+    j<{ ok: boolean; settings: Record<string, unknown>; ctx_bench?: Record<string, unknown> }>(
+      fetchWithAuth(`${BASE}/settings`),
+    ),
   saveSettings: (settings: Record<string, unknown>) =>
     j<{ ok: boolean; settings: Record<string, unknown> }>(
       fetchWithAuth(`${BASE}/settings`, {
@@ -454,6 +457,60 @@ export const api = {
         body: JSON.stringify({ task_id: taskId || null }),
       }),
     ),
+  ctxBench: (
+    model: string,
+    onEvent: (name: string, data: Record<string, unknown>) => void,
+  ): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      let buf = ''
+      fetchWithAuth(
+        `${BASE}/ctx-bench`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model }),
+        },
+        600_000,
+      )
+        .then(async (r) => {
+          if (!r.ok) {
+            let detail = `HTTP ${r.status}`
+            try {
+              const b = await r.json()
+              if (b && b.detail) detail = String(b.detail)
+            } catch {
+              /* */
+            }
+            throw new Error(detail)
+          }
+          if (!r.body) return resolve()
+          const reader = r.body.getReader()
+          const dec = new TextDecoder()
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += dec.decode(value, { stream: true })
+            let i
+            while ((i = buf.indexOf('\n\n')) >= 0) {
+              const chunk = buf.slice(0, i)
+              buf = buf.slice(i + 2)
+              const parsed = parseSse(chunk)
+              for (const ev of parsed) onEvent(ev.name, ev.data)
+            }
+          }
+          resolve()
+        })
+        .catch(reject)
+    }),
+  applyCtx: (num_ctx: number) =>
+    j<{ ok: boolean; num_ctx: number }>(
+      fetchWithAuth(`${BASE}/ctx-bench/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ num_ctx }),
+      }),
+    ),
+>>>>>>> 1586a16 (B1/B2: calibrar num_ctx por GPU y aviso si compacta demasiado.)
   mcp: () =>
     j<{ ok: boolean; ready: boolean; servers: { name: string; connected: boolean; tools: string[] }[]; tools: string[] }>(
       fetchWithAuth(`${BASE}/mcp`),

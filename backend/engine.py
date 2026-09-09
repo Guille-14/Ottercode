@@ -762,6 +762,13 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                     "text": f"🗜️ Compactación preflight: {len(_summ)} chars de resumen + cola reciente."
                 })
             run.transcript.append({"kind": "system", "text": f"🗜️ contexto compactado ({len(_summ)} chars)."})
+            try:
+                from backend.ctx_bench import compact_pressure_hint
+                _hint = compact_pressure_hint(run)
+                if _hint:
+                    yield sse(SseEvent.ctx_hint, _hint)
+            except Exception:
+                pass
         steps += 1
         # v4.4 · cada generación arranca con el parcial a cero
         try:

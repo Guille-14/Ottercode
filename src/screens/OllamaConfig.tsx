@@ -56,12 +56,20 @@ export default function OllamaConfig() {
   const [saving, setSaving] = useState(false)
   const [applied, setApplied] = useState('')
   const [dirty, setDirty] = useState(false)
+  const [benchLog, setBenchLog] = useState('')
+  const [benchBusy, setBenchBusy] = useState(false)
+  const [benchTable, setBenchTable] = useState<
+    { num_ctx: number; tps?: number; ok?: boolean; error?: string }[]
+  >([])
 
   const load = async () => {
     try {
       const r = await api.settings()
       setS(r.settings)
       setErr('')
+      const models = (r.ctx_bench as { models?: Record<string, { steps?: typeof benchTable; recommended?: number }> } | undefined)?.models
+      const first = models && Object.values(models)[0]
+      if (first?.steps) setBenchTable(first.steps as typeof benchTable)
     } catch (e) {
       setErr((e as Error).message)
     }

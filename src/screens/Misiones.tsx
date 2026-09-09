@@ -22,6 +22,9 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
     clearMission,
     pendingPerm,
     approvePerm,
+    ctxHint,
+    dismissCtxHint,
+    applyCtxHint,
     artifactsOpen,
     artifactsUserClosed,
     setArtifactsOpen,
@@ -160,6 +163,27 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
       {missionError && (
         <div className="border-b border-danger/20 bg-danger/5 px-4 py-2 text-xs text-danger">
           Error en la misión: {missionError}
+        </div>
+      )}
+      {ctxHint && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-accent/20 bg-accent/5 px-4 py-2 text-xs text-ink">
+          <span>
+            Compacta muy a menudo ({ctxHint.compact_hits}×). ctx={ctxHint.current_ctx}
+            {ctxHint.current_tps != null ? ` · ${ctxHint.current_tps} tok/s` : ''}
+            {ctxHint.next_ctx
+              ? ` → ${ctxHint.next_ctx}${ctxHint.next_tps != null ? ` · ${ctxHint.next_tps} tok/s` : ''}`
+              : ctxHint.has_bench
+                ? ' · no hay peldaño más alto medido'
+                : ' · sin calibración (Ajustes → Recalibrar)'}
+          </span>
+          {Boolean(ctxHint.next_ctx || ctxHint.recommended) && (
+            <Button variant="ghost" onClick={() => void applyCtxHint()}>
+              Subir ctx
+            </Button>
+          )}
+          <button type="button" className="text-muted" onClick={() => dismissCtxHint()}>
+            Cerrar
+          </button>
         </div>
       )}
 
