@@ -99,6 +99,19 @@ export default function App() {
         e.preventDefault()
         setPalette((v) => !v)
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        useUi.getState().clearMission()
+        useUi.getState().setView('misiones')
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'l') {
+        e.preventDefault()
+        document.getElementById('chatInput')?.focus()
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === '.') {
+        e.preventDefault()
+        useUi.getState().stopMission(true)
+      }
       if (e.key === 'Escape') {
         const st = useUi.getState()
         if (st.studio || st.artifactsOpen) {
@@ -484,11 +497,22 @@ export default function App() {
 function TokenStats() {
   const totalTokens = useUi((s) => s.totalTokens)
   const tokensPerSec = useUi((s) => s.tokensPerSec)
+  const started = useUi((s) => s.missionStartedAt)
+  const streaming = useUi((s) => s.streaming)
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    if (!started || !streaming) {
+      setElapsed(started ? Math.max(0, (Date.now() - started) / 1000) : 0)
+      return
+    }
+    const t = window.setInterval(() => setElapsed((Date.now() - started) / 1000), 250)
+    return () => window.clearInterval(t)
+  }, [started, streaming])
   return (
     <span
       id="tokenStats"
       className="hidden select-none items-center gap-2 rounded-full border border-line bg-panel2 px-2.5 py-1 text-[10px] font-medium text-muted sm:flex"
-      title="Tokens generados por el modelo en esta conversación"
+      title="Tokens y tiempo de esta generación"
     >
       <span className="inline-flex items-center gap-1">
         <Zap className="h-3 w-3 text-accent" />
@@ -496,8 +520,9 @@ function TokenStats() {
       </span>
       <span className="inline-flex items-center gap-1">
         <Hash className="h-3 w-3 text-accent" />
-        {totalTokens.toLocaleString('es')} tokens
+        {totalTokens.toLocaleString('es')} tok
       </span>
+      {started ? <span className="oc-mono">{elapsed.toFixed(1)}s</span> : null}
     </span>
   )
 }

@@ -148,8 +148,8 @@ export default function ChatInputBar({
 
     const parsed = trimmed.startsWith('/') ? F.parseInput(trimmed) : { fields: { task: trimmed } }
 
-    // Si el modelo está ocupado pensando o escribiendo, añadir a la cola
-    if (streaming) {
+    // Hermes: enviar mientras genera = interrumpir y redirigir (cola + abort).
+    if (streaming && !parsed.action) {
       const payload = {
         ...parsed.fields,
         mode,
@@ -161,15 +161,50 @@ export default function ChatInputBar({
         yolo: yolo || Boolean(parsed.fields.yolo),
       }
       enqueueMission(trimmed, payload)
+      onStop()
       setTask('')
       setAttach([])
       return
     }
 
-    // Ejecución de comandos del sistema
-    if (parsed.action === '/reset') {
-      useUi.getState().clearMission()
+    const st = useUi.getState()
+    if (parsed.action === '/reset' || parsed.action === '/new') {
+      st.clearMission()
       setTask('')
+      return
+    }
+    if (parsed.action === '/stop') {
+      st.stopMission(true)
+      setTask('')
+      return
+    }
+    if (parsed.action === '/retry') {
+      setTask('')
+      onLaunch({ task: 'continuar desde el último checkpoint', continue_task: st.taskId || undefined, force: true })
+      return
+    }
+    if (parsed.action === '/undo') {
+      const id = st.taskId
+      setTask('')
+      if (!id) { st.setNotice('No hay misión para deshacer'); return }
+      void api.missionUndo(id).then(() => st.setNotice('Cambios deshechos')).catch((e: Error) => st.setNotice(e.message))
+      return
+    }
+    if (parsed.action === '/compress') {
+      const id = st.taskId
+      setTask('')
+      if (!id) { st.setNotice('No hay misión para compactar'); return }
+      void api.compactNow(id).then((r) => st.setNotice(r.ok ? 'Contexto compactado' : 'No se pudo compactar')).catch((e: Error) => st.setNotice(e.message))
+      return
+    }
+    if (parsed.action === '/focus') {
+      st.toggleFocus()
+      setTask('')
+      return
+    }
+    if (parsed.action === '/save') {
+      setTask('')
+      st.setNotice('Usa Ctrl+K → exportar, o descarga el ZIP al terminar')
       return
     }
     if (parsed.action === '/help') {
@@ -478,7 +513,7 @@ export default function ChatInputBar({
       </div>
 
       <p className="mt-1.5 text-center text-[11px] text-muted">
-        OtterCode con agentes locales · Los modelos pueden cometer errores · Verifica el código generado.
+        Enter envía · Shift+Enter salto · Ctrl+K paleta · Ctrl+N nuevo · Ctrl+. para · / para comandos
       </p>
     </div>
   )

@@ -126,14 +126,14 @@ function buildTimeline(mission: MissionEvent[]): TimelineItem[] {
       const key = `${ev.id}:${end}`
       const cached = closed ? segCache.get(key) : undefined
       if (cached) {
-        out.push(cached)
+        out.push({ kind: 'seg', key: cached.key, seg: cached })
       } else {
         const seg = buildSeg(mission, start, end, agent, closed)
         seg.key = key
         seg.type = 'agent'
         seg.missionIndex = start
         if (closed) segCache.set(key, seg)
-        out.push(seg)
+        out.push({ kind: 'seg', key, seg })
       }
       i = j
       continue
@@ -283,7 +283,7 @@ const SegBubble = memo(function SegBubble({
   hideLogs: boolean
 }) {
   const [copied, setCopied] = useState(false)
-  const [thoughtOpen, setThoughtOpen] = useState(false)
+  const [thoughtOpen, setThoughtOpen] = useState(Boolean(last && streaming))
   const [toolsOpen, setToolsOpen] = useState(true)
   const { thought, text } = useMemo(() => splitThinking(seg.buf), [seg.buf])
 

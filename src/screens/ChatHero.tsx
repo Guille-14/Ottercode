@@ -46,16 +46,16 @@ export default function ChatHero({
       </div>
 
       <h1 className="text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
-        ¿En qué puedo ayudarte hoy?
+        Agente local. GPU. Sin nube.
       </h1>
       <p className="mt-2 max-w-md text-sm text-muted">
-        OtterCode orquesta modelos locales en Ollama con herramientas de sistema,
-        ficheros y ejecución en sandbox.
+        Otter lee, escribe, ejecuta y razona sobre tu workspace con Ollama.
+        Interrumpe cuando quieras, encola el siguiente mensaje, compacta contexto.
       </p>
       <ol className="mt-4 max-w-md space-y-1 text-left text-xs text-muted">
-        <li>1. Arranca Ollama (`ollama serve`).</li>
-        <li>2. `ollama pull qwen2.5-coder:7b` (o elige un modelo abajo).</li>
-        <li>3. Escribe la primera tarea en el chat.</li>
+        <li>1. Ollama en marcha (`ollama serve`) y un modelo en el selector.</li>
+        <li>2. Enter envía · Ctrl+K paleta · /stop aborta · /compress compacta.</li>
+        <li>3. Si está generando, un mensaje nuevo interrumpe y redirige.</li>
       </ol>
 
       <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-3 py-1 text-xs text-muted">

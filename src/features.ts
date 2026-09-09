@@ -9,7 +9,7 @@ import { toolCallFilepath, normPath } from './sse'
 
 export interface SlashResult {
   fields: Record<string, unknown>
-  action?: '/reset' | '/save' | '/focus' | '/help' | '/project'
+  action?: '/reset' | '/save' | '/focus' | '/help' | '/project' | '/stop' | '/retry' | '/new' | '/undo' | '/compress'
 }
 
 export const SLASH_COMMANDS: { cmd: string; desc: string }[] = [
@@ -18,6 +18,11 @@ export const SLASH_COMMANDS: { cmd: string; desc: string }[] = [
   { cmd: '/agents', desc: 'Empezar por un agente: /agents architect|researcher|developer|reviewer' },
   { cmd: '/ultrareview', desc: 'Revisión rigurosa profunda del resultado' },
   { cmd: '/reset', desc: 'Limpiar la misión actual' },
+  { cmd: '/new', desc: 'Nueva sesión' },
+  { cmd: '/stop', desc: 'Abortar la generación en curso' },
+  { cmd: '/retry', desc: 'Reintentar el último turno' },
+  { cmd: '/undo', desc: 'Deshacer cambios git de la misión' },
+  { cmd: '/compress', desc: 'Compactar el contexto ahora' },
   { cmd: '/model', desc: 'Elegir modelo: /model <nombre>' },
   { cmd: '/sys', desc: 'Inyectar una regla de sistema temporal: /sys <regla>' },
   { cmd: '/save', desc: 'Exportar el transcurso a Markdown' },
@@ -42,6 +47,16 @@ export function applySlash(line: string): SlashResult {
       return { fields: { task: arg || 'revisión a fondo', mode: 'chain', start_agent: 'reviewer' } }
     case '/reset':
       return { fields: {}, action: '/reset' }
+    case '/new':
+      return { fields: {}, action: '/new' }
+    case '/stop':
+      return { fields: {}, action: '/stop' }
+    case '/retry':
+      return { fields: {}, action: '/retry' }
+    case '/undo':
+      return { fields: {}, action: '/undo' }
+    case '/compress':
+      return { fields: {}, action: '/compress' }
     case '/model':
       return { fields: { model: arg } }
     case '/sys':
