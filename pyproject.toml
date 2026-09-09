@@ -21,6 +21,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "rich>=13.0",
     "textual>=0.80.0",
+    "croniter>=2.0.0",
 ]
 
 [project.optional-dependencies]

@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Square, Sliders, Paperclip, RotateCcw, Skull, Clock, X } from 'lucide-react'
 import { useUi } from '../store'
-import { api, type AgentInfo, type Profile } from '../api'
+import { api, fetchWithAuth, type AgentInfo, type Profile } from '../api'
 import { F, SLASH_COMMANDS } from '../features'
 import SlashPopup from '../SlashPopup'
 
@@ -255,6 +255,47 @@ export default function ChatInputBar({
       if (path) {
         api.setProject(path).then(() => useUi.getState().setNotice(`Proyecto: ${path}`)).catch((e: Error) => useUi.getState().setNotice(e.message))
       }
+      setTask('')
+      return
+    }
+    if (parsed.action === '/cron') {
+      const arg = String(parsed.fields.cron || '').trim()
+      const [a, ...rest] = arg.split(/\s+/)
+      const id = rest.join(' ')
+      const body: Record<string, unknown> = { action: a || 'list', id, name: id }
+      void fetchWithAuth('/api/cron', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then((r) => r.json()).then((j) => useUi.getState().setNotice(JSON.stringify(j).slice(0, 180)))
+        .catch((e: Error) => useUi.getState().setNotice(e.message))
+      setTask('')
+      return
+    }
+    if (parsed.action === '/skills') {
+      const arg = String(parsed.fields.skills_cmd || '').trim()
+      void fetchWithAuth('/api/skills').then((r) => r.json()).then((j) => useUi.getState().setNotice('skills: ' + ((j.skills || []).length)))
+        .catch((e: Error) => useUi.getState().setNotice(e.message))
+      setTask('')
+      return
+    }
+    if (parsed.action === '/memory') {
+      const arg = String(parsed.fields.memory_cmd || '').trim()
+      if (arg.startsWith('approve ')) {
+        const pid = arg.slice(8).trim()
+        void fetchWithAuth(`/api/memory/approve/${encodeURIComponent(pid)}`, { method: 'POST' })
+          .then((r) => r.json()).then((j) => useUi.getState().setNotice(j.ok ? 'memoria aprobada' : String(j.error)))
+      } else {
+        void fetchWithAuth('/api/memory/status').then((r) => r.json()).then((j) => useUi.getState().setNotice('memory provider: ' + (j.provider || 'builtin')))
+      }
+      setTask('')
+      return
+    }
+    if (parsed.action === '/sessions') {
+      void api.history().then((r) => useUi.getState().setNotice(`${r.sessions.length} sesiones`)).catch((e: Error) => useUi.getState().setNotice(e.message))
+      setTask('')
+      return
+    }
+    if (parsed.action === '/journey') {
+      useUi.getState().setView('identidad')
+      useUi.getState().setNotice('Journey: pestaña Agentes / grafo')
       setTask('')
       return
     }

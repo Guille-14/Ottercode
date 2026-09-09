@@ -30,6 +30,13 @@ export const SLASH_COMMANDS: { cmd: string; desc: string }[] = [
   { cmd: '/yolo', desc: 'Ejecutar directo con developer, sin revisión previa' },
   { cmd: '/help', desc: 'Lista los comandos slash' },
   { cmd: '/project', desc: 'Carpeta de proyecto: /project <ruta>' },
+  { cmd: '/cron', desc: 'Cron: /cron list|pause|resume|run|remove <id>' },
+  { cmd: '/skills', desc: 'Skills: /skills list|enable|disable|delete <name>' },
+  { cmd: '/memory', desc: 'Memoria: /memory approve <id> | status' },
+  { cmd: '/sessions', desc: 'Sesiones: /sessions list | show <id>' },
+  { cmd: '/journey', desc: 'Grafo de aprendizaje' },
+  { cmd: '/learning', desc: 'Alias de /journey' },
+  { cmd: '/memory-graph', desc: 'Alias de /journey' },
 ]
 
 export function applySlash(line: string): SlashResult {
@@ -71,6 +78,18 @@ export function applySlash(line: string): SlashResult {
       return { fields: {}, action: '/help' }
     case '/project':
       return { fields: { project_path: arg }, action: '/project' }
+    case '/cron':
+      return { fields: { cron: arg }, action: '/cron' }
+    case '/skills':
+      return { fields: { skills_cmd: arg }, action: '/skills' }
+    case '/memory':
+      return { fields: { memory_cmd: arg }, action: '/memory' }
+    case '/sessions':
+      return { fields: { sessions_cmd: arg }, action: '/sessions' }
+    case '/journey':
+    case '/learning':
+    case '/memory-graph':
+      return { fields: {}, action: '/journey' }
     default:
       if (cmd.startsWith('/') && cmd.length > 1) {
         const skill = cmd.slice(1)

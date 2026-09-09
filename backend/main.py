@@ -172,3 +172,5 @@ def mobile_icon_512() -> FileResponse:
 
 app.include_router(api_router)
 app.include_router(vault_router)
+from backend.neo_routes import router as neo_router  # noqa: E402
+app.include_router(neo_router)

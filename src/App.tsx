@@ -19,6 +19,9 @@ import ConfirmDialog from './ConfirmDialog'
 import ErrorBoundary from './ErrorBoundary'
 import UndoToast from './UndoToast'
 import Ajustes from './screens/Ajustes'
+import LearningJourney from './LearningJourney'
+import BotRoster from './BotRoster'
+import SubagentsFrame from './SubagentsFrame'
 import { useUi, isDoneName } from './store'
 import { api, type HistorySession, type Profile } from './api'
 import { convertTranscript, missionUnfinished } from './mission'
@@ -105,6 +108,10 @@ export default function App() {
         useUi.getState().setView('misiones')
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'l') {
+        e.preventDefault()
+        document.getElementById('chatInput')?.focus()
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.code === 'Space') {
         e.preventDefault()
         document.getElementById('chatInput')?.focus()
       }
@@ -426,6 +433,7 @@ export default function App() {
           <div className="flex min-h-0 flex-1 flex-col md:flex-row">
             <div className="flex min-w-0 flex-1 flex-col">
               <ErrorBoundary>
+                <SubagentsFrame />
                 <Misiones hideLogs={hideLogs} />
               </ErrorBoundary>
             </div>
@@ -438,7 +446,13 @@ export default function App() {
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto">
-            {view === 'identidad' && <Identidad />}
+            {view === 'identidad' && (
+              <>
+                <Identidad />
+                <BotRoster />
+                <LearningJourney />
+              </>
+            )}
             {(view === 'ajustes' || view === 'modelos' || view === 'skills' || view === 'config' || view === 'estado') && <Ajustes />}
             {view === 'sesiones' && <Sesiones />}
           </div>

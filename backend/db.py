@@ -252,3 +252,47 @@ def get_session_detail(session_id: str) -> dict:
         d["meta"]["ultra_review"] = ultra_review
         d["transcript"] = transcript
         return d
+
+
+def session_search(query: str, limit: int = 20, session_id: str | None = None) -> list:
+    """Mensajes reales vía FTS5 (no resumen LLM)."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    lim = max(1, min(int(limit or 20), 100))
+    with db_read() as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            if session_id:
+                rows = conn.execute(
+                    """SELECT m.id, m.session_id, m.kind, m.agent, m.tool_name, m.text, m.created_at
+                       FROM messages m
+                       JOIN messages_fts f ON f.rowid = m.id
+                       WHERE m.session_id = ? AND messages_fts MATCH ?
+                       ORDER BY m.id LIMIT ?""",
+                    (session_id, q, lim),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT m.id, m.session_id, m.kind, m.agent, m.tool_name, m.text, m.created_at
+                       FROM messages m
+                       JOIN messages_fts f ON f.rowid = m.id
+                       WHERE messages_fts MATCH ?
+                       ORDER BY m.id DESC LIMIT ?""",
+                    (q, lim),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            like = f"%{q}%"
+            if session_id:
+                rows = conn.execute(
+                    """SELECT id, session_id, kind, agent, tool_name, text, created_at
+                       FROM messages WHERE session_id=? AND text LIKE ? LIMIT ?""",
+                    (session_id, like, lim),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT id, session_id, kind, agent, tool_name, text, created_at
+                       FROM messages WHERE text LIKE ? ORDER BY id DESC LIMIT ?""",
+                    (like, lim),
+                ).fetchall()
+        return [dict(r) for r in rows]

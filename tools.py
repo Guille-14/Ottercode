@@ -174,6 +174,16 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                         "example": '{"tool": "semantic_search", "arguments": {"query": "autenticación de usuarios", "top_k": 4}}'},
     "index_workspace": {"cat": "Memoria", "writes_fs": False, "desc": "Indexa semánticamente todos los archivos de código del proyecto para RAG",
                         "example": '{"tool": "index_workspace", "arguments": {}}'},
+    "memory": {"cat": "Memoria", "writes_fs": True, "desc": "Memoria Hermes: add|replace|remove sobre memory|user",
+               "example": '{"tool": "memory", "arguments": {"action": "add", "target": "memory", "text": "prefiero pytest"}}'},
+    "use_skill": {"cat": "Memoria", "writes_fs": False, "desc": "Invoca una SKILL.md de ~/.ottercode/skills",
+                  "example": '{"tool": "use_skill", "arguments": {"name": "mi-skill"}}'},
+    "cronjob": {"cat": "Plan", "writes_fs": False, "desc": "CRUD de cron: create|list|update|pause|resume|run|remove",
+                "example": '{"tool": "cronjob", "arguments": {"action": "list"}}'},
+    "delegate_task": {"cat": "Plan", "writes_fs": False, "desc": "Lanza un subagente en background (cola GPU)",
+                      "example": '{"tool": "delegate_task", "arguments": {"task": "revisa tests"}}'},
+    "session_search": {"cat": "Memoria", "writes_fs": False, "desc": "Busca mensajes reales (FTS5) en sesiones",
+                       "example": '{"tool": "session_search", "arguments": {"query": "oauth"}}'},
 }
 
 # Nombres alternativos aceptados (compatibilidad / slash commands)
@@ -2023,6 +2033,57 @@ class ToolExecutor:
                 output = self.model_list()
             elif canonical == "ollama_consult":
                 output = self.ollama_consult(args.get("model", ""), args.get("prompt", ""))
+            elif canonical == "memory":
+                from backend.memory_md import memory_tool
+                output = json.dumps(memory_tool(
+                    str(args.get("action") or "add"),
+                    str(args.get("target") or "memory"),
+                    str(args.get("text") or ""),
+                    str(args.get("old_text") or ""),
+                ), ensure_ascii=False)
+            elif canonical == "use_skill":
+                from backend.skill_creator import list_home_skills
+                name = str(args.get("name") or "")
+                hit = next((s for s in list_home_skills() if s["name"].lower() == name.lower()), None)
+                output = (hit.get("body") if hit and hit.get("enabled") else f"skill '{name}' no disponible")
+            elif canonical == "cronjob":
+                from backend.cron import jobs as CJ
+                from backend.cron.scheduler import run_now
+                act = str(args.get("action") or "list").lower()
+                ident = str(args.get("id") or args.get("name") or "")
+                if act == "list":
+                    output = json.dumps(CJ.list_jobs(), ensure_ascii=False)[:8000]
+                elif act == "create":
+                    output = json.dumps(CJ.create_job(args, from_agent=True), ensure_ascii=False)
+                elif act == "pause":
+                    output = json.dumps(CJ.pause_job(ident))
+                elif act == "resume":
+                    output = json.dumps(CJ.resume_job(ident))
+                elif act == "remove":
+                    output = json.dumps(CJ.remove_job(ident))
+                elif act == "run":
+                    output = json.dumps(run_now(ident))
+                elif act == "update":
+                    output = json.dumps(CJ.update_job(ident, args))
+                else:
+                    output = "acción cron desconocida"
+            elif canonical == "delegate_task":
+                from backend.subagents import delegate_task
+                output = json.dumps(delegate_task(
+                    str(args.get("task") or ""),
+                    str(args.get("context") or ""),
+                    str(args.get("model") or ""),
+                    list(args.get("skills") or []),
+                    list(args.get("tools") or []),
+                    int(args.get("timeout_seconds") or 300),
+                ), ensure_ascii=False)
+            elif canonical == "session_search":
+                from backend.db import session_search
+                output = json.dumps(session_search(
+                    str(args.get("query") or ""),
+                    int(args.get("limit") or 20),
+                    args.get("session_id"),
+                ), ensure_ascii=False)[:8000]
             else:
                 return self._result(
                     False,

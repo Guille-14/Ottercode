@@ -252,6 +252,13 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
     mem = get_memory()
     if mem:
         system_prompt = system_prompt + "\n\n# 🧠 MEMORIA APRENDIDA (CONTEXTO A LARGO PLAZO)\n" + mem
+    try:
+        from backend.memory_md import frozen_snapshot
+        snap = frozen_snapshot()
+        if snap:
+            system_prompt = system_prompt + "\n\n# MEMORY SNAPSHOT (frozen)\n" + snap
+    except Exception:
+        pass
     from backend.md_skills import active_skill_prompt
     _sk = active_skill_prompt(getattr(run, "forced_skill", "") or "")
     if _sk:
@@ -776,6 +783,11 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
     cleaned = _strip_think(last_text)
     try:
         harvest_memory(run, agent_id, cleaned)
+    except Exception:
+        pass
+    try:
+        from backend.review import enqueue_review
+        enqueue_review(run)
     except Exception:
         pass
     return cleaned  # type: ignore[return-value]
