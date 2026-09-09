@@ -11,6 +11,7 @@ export default function Skills() {
   const [skills, setSkills] = useState<Skill[]>([])
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
+  const [q, setQ] = useState('')
 
   const load = async () => {
     try {

@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, CloudDownload, Trash2, Copy, Cpu } from 'lucide-react'
 import { api, type Pulse } from '../api'
+import { useUi } from '../store'
 import { Badge, Card } from '../ui'
 import ConfirmDialog from '../ConfirmDialog'
 import UndoToast from '../UndoToast'
@@ -204,7 +205,17 @@ export default function Modelos() {
               return (
                 <div key={m} className="group flex items-center justify-between gap-3 rounded-lg px-3 py-2 hover:bg-canvas">
                   <div className="flex min-w-0 items-center gap-2">
-                    <span className="oc-mono truncate text-sm font-medium">{m}</span>
+                    <button
+                      type="button"
+                      className="oc-mono truncate text-sm font-medium hover:underline"
+                      title="Usar en el chat"
+                      onClick={() => {
+                        useUi.getState().setModel(m)
+                        useUi.getState().setNotice(`Modelo activo: ${m}`)
+                      }}
+                    >
+                      {m}
+                    </button>
                     {gpu && (
                       <Badge tone="ok">
                         <span className="oc-mono">{fmtBytes(gpu.size_vram)}</span>
