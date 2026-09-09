@@ -18,10 +18,27 @@ dependencies = [
     "httpx>=0.27.0",
     "sqlite-vec>=0.1.0",
     "mcp>=1.0.0",
-    "python-dotenv>=1.0.0"
+    "python-dotenv>=1.0.0",
+    "rich>=13.0",
 ]
+
+[project.optional-dependencies]
+cli = ["textual>=0.80.0", "prompt_toolkit>=3.0"]
+dev = ["pytest>=7.0", "mypy", "bandit"]
+
+[project.scripts]
+ottercode = "ottercode_cli.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+py-modules = ["tools", "events", "sandbox", "rag", "mcp_client"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*", "ottercode_cli*"]
+exclude = ["src*", "frontend*", "tests*", "dev*", "static*"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q"
-testpaths = ["dev"]
+testpaths = ["dev", "tests"]

@@ -4,19 +4,42 @@ Version: 3.0.0
 Summary: Orquestador local de agentes autónomos con Ollama y MCP
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+License-File: LICENSE
 Requires-Dist: fastapi>=0.110.0
 Requires-Dist: uvicorn[standard]>=0.28.0
 Requires-Dist: websockets>=12.0
 Requires-Dist: pydantic>=2.6.0
+Requires-Dist: pydantic-settings>=2.0
 Requires-Dist: requests>=2.31.0
 Requires-Dist: httpx>=0.27.0
 Requires-Dist: sqlite-vec>=0.1.0
 Requires-Dist: mcp>=1.0.0
 Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: rich>=13.0
+Provides-Extra: cli
+Requires-Dist: textual>=0.80.0; extra == "cli"
+Requires-Dist: prompt_toolkit>=3.0; extra == "cli"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Requires-Dist: bandit; extra == "dev"
+Dynamic: license-file
 
 # OtterCode Neo
 
 Agente de código **local** con Ollama: lee el repo, parchea, corre tests. FastAPI + React. Un coder por defecto (modo chat); la cadena de agentes es opcional.
+
+Licencia: [MIT](LICENSE).
+
+```mermaid
+flowchart LR
+  UI[React UI] -->|SSE| API[FastAPI]
+  API --> SQLite[(SQLite WAL)]
+  API --> RAG[RAG BM25+vec]
+  API --> MCP[MCP + breaker]
+  API --> Ollama[Ollama GPU]
+  API --> Bwrap[bwrap no-net]
+```
 
 ## Quickstart
 
@@ -37,6 +60,17 @@ Ollama en `127.0.0.1:11434`. Arranque:
 
 Abre `http://127.0.0.1:8000`.
 
+## Terminal (CLI / TUI)
+
+Mismo core que la web. Ver [docs/cli.md](docs/cli.md).
+
+```bash
+pip install -e .
+ottercode chat
+ottercode learn python
+ottercode edit src/app.py
+```
+
 ## Variables de entorno (backend)
 
 | Variable | Default | Significado |
@@ -47,7 +81,7 @@ Abre `http://127.0.0.1:8000`.
 | `OTTERCODE_PORT` | `8000` | Puerto HTTP |
 | `OTTERCODE_MODEL` | `qwen2.5-coder:7b` | Coder por defecto (si no está, primer modelo de `/api/tags`) |
 | `OTTERCODE_API` | deprecado | Si vale `ollama`/`openai`, fallback de `OTTERCODE_LLM_BACKEND`. Si parece URL, se ignora. |
-| `OTTERCODE_NUM_CTX` | `16384` | Contexto (8 GB) |
+| `OTTERCODE_NUM_CTX` | `32768` | Contexto (FLASH_ATTENTION + KV q8_0 en 8 GB) |
 | `OTTERCODE_NUM_PREDICT` | `4096` | Tope de generación |
 | `OTTERCODE_KEEP_ALIVE` | `15m` | KV del coder en VRAM |
 | `OTTERCODE_ASK_PERMISSIONS` | `1` | Confirmar tools peligrosas |

@@ -1,0 +1,7 @@
+backend
+events
+mcp_client
+ottercode_cli
+rag
+sandbox
+tools

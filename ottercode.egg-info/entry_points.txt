@@ -1,0 +1,2 @@
+[console_scripts]
+ottercode = ottercode_cli.main:main

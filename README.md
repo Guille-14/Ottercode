@@ -33,6 +33,17 @@ Ollama en `127.0.0.1:11434`. Arranque:
 
 Abre `http://127.0.0.1:8000`.
 
+## Terminal (CLI / TUI)
+
+Mismo core que la web. Ver [docs/cli.md](docs/cli.md).
+
+```bash
+pip install -e .
+ottercode chat
+ottercode learn python
+ottercode edit src/app.py
+```
+
 ## Variables de entorno (backend)
 
 | Variable | Default | Significado |

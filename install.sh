@@ -77,6 +77,6 @@ _warn_flag() {
 _warn_flag OLLAMA_FLASH_ATTENTION
 _warn_flag OLLAMA_KV_CACHE_TYPE
 
-echo "OtterCode listo. Arrancando backend en :8000…"
+echo "CLI: ottercode chat  (docs/cli.md). Arrancando backend en :8000…"
 echo "Permisos de herramientas: ON por defecto. YOLO en la UI o /yolo."
 exec .venv/bin/python -m uvicorn backend:app --host 0.0.0.0 --port 8000
