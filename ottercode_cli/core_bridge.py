@@ -185,6 +185,14 @@ def status_blob(state: CliState) -> str:
     )
 
 
+def list_models() -> List[str]:
+    try:
+        from backend.ollama import fetch_models
+        return list(fetch_models() or [])
+    except Exception:
+        return []
+
+
 def new_state(workdir: Optional[Path] = None, model: Optional[str] = None) -> CliState:
     sid = new_session_id()
     wd = workdir or default_workdir()

@@ -12,6 +12,15 @@ from ottercode_cli.sessions import list_sessions, load_session
 from ottercode_cli.slash import SLASH_HELP, parse_slash
 
 
+def _launch(state: CliState, args: argparse.Namespace, seed: str = "") -> int:
+    from ottercode_cli.tui import HAS_TEXTUAL, run_tui
+    if args.plain or not HAS_TEXTUAL:
+        if not args.plain and not HAS_TEXTUAL:
+            print("Tip: pip install textual  → TUI tipo OpenCode (F2 cambia modelo).")
+        return _repl(state, seed)
+    return run_tui(state, seed)
+
+
 def _repl(state: CliState, first: str = "") -> int:
     """REPL Rich/plain si no hay TUI o --plain."""
     print("OtterCode CLI · /help para comandos · Ctrl-D para salir")
@@ -93,10 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         state.learn_topic = " ".join(getattr(args, "tema", []) or [])
         os.environ["OTTERCODE_LEARNING_MODE"] = "1"
         seed = f"Quiero aprender {state.learn_topic or 'programación'}. Empieza con un plan corto y el primer ejercicio."
-        if args.plain or not args.tui:
-            return _repl(state, seed)
-        from ottercode_cli.tui import run_tui
-        return run_tui(state, seed)
+        return _launch(state, args, seed)
     if cmd == "run":
         c = " ".join(getattr(args, "comando", []) or [])
         if not c:

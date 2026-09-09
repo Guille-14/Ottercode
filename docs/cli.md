@@ -17,6 +17,10 @@ ottercode chat
 python -m ottercode_cli chat
 ```
 
+TUI (si `pip install textual` o `.[cli]`): `ottercode chat` abre paneles
+estilo OpenCode. **F2** cambia de modelo (lista Ollama). F1 ayuda, F4 diff,
+Ctrl+Y YOLO. Escribe `/` para autocompletar slash.
+
 ## Comandos
 
 | Comando | Efecto |

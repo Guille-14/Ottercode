@@ -23,7 +23,11 @@ def handle_slash(state: CliState, cmd: SlashCmd, printer: PrintFn) -> bool:
     if n == "model":
         if a:
             state.model = a
-        printer(f"modelo={state.model}")
+            printer(f"modelo={state.model}")
+            return True
+        from ottercode_cli.core_bridge import list_models
+        names = list_models()
+        printer(f"actual={state.model}\n" + ("\n".join(names) if names else "(Ollama no lista modelos)"))
         return True
     if n in ("context", "config"):
         keys = [

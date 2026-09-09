@@ -32,6 +32,12 @@ def test_session_roundtrip(tmp_path, monkeypatch):
     assert any(r["id"] == "abc" for r in rows)
 
 
+def test_list_models_type():
+    from ottercode_cli.core_bridge import list_models
+    m = list_models()
+    assert isinstance(m, list)
+
+
 def test_slash_help_text():
     from ottercode_cli.slash import SLASH_HELP
     for name in ("/help", "/status", "/diff", "/apply", "/reject", "/run", "/explain"):
