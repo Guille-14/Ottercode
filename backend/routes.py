@@ -227,6 +227,12 @@ def api_pulse() -> Dict[str, Any]:
     # v6.0 · solo inyectar DEFAULT_MODEL cuando Ollama respondió: si está
     # caído devolvemos [] para que la UI no crea que ya hay un modelo.
     merged = sorted(set(models)) if ok else sorted([])
+    if not ok:
+        health = "down"
+    elif activity.get("running") and not ps_models:
+        health = "loading"
+    else:
+        health = "online"
     return {
         "ok": ok,
         "version": APP_VERSION,
@@ -237,6 +243,7 @@ def api_pulse() -> Dict[str, Any]:
         "activity": activity,
         "num_ctx_default": NUM_CTX_DEFAULT,
         "vram_total": VRAM_TOTAL_BYTES,
+        "ollama_health": health,
     }
 
 
@@ -386,6 +393,7 @@ class CtxBenchRequest(BaseModel):
 
 class CtxApplyRequest(BaseModel):
     num_ctx: int = Field(ge=2048, le=131072)
+    model: str = ""
 
 
 @router.post(Route.CTX_BENCH)
@@ -409,9 +417,13 @@ def api_ctx_bench(req: CtxBenchRequest) -> StreamingResponse:
 @router.post(Route.CTX_BENCH_APPLY)
 def api_ctx_bench_apply(req: CtxApplyRequest) -> Dict[str, Any]:
     import backend.settings as _s
-    saved = _s.save_runtime_settings({"num_ctx": int(req.num_ctx)})
+    if (req.model or "").strip():
+        saved = _s.set_num_ctx_for_model(req.model.strip(), int(req.num_ctx))
+    else:
+        saved = _s.save_runtime_settings({"num_ctx": int(req.num_ctx)})
     for run in list(ACTIVE_RUN.values()):
-        run.num_ctx = int(req.num_ctx)
+        if not req.model or run.model == req.model:
+            run.num_ctx = int(req.num_ctx)
     return {"ok": True, "num_ctx": int(req.num_ctx), "settings": saved}
 
 
@@ -575,6 +587,23 @@ def api_model_show(req: ModelNameRequest) -> Dict[str, Any]:
         return text if len(text) <= limit else text[:limit] + "\n… (truncado)"
 
     details = data.get("details") or {}
+    from backend.ollama import model_supports_vision, parse_context_length, strip_image_b64  # noqa: F401
+    ctx_max = parse_context_length(data) or parse_context_length({"parameters": data.get("parameters"), "modelfile": data.get("modelfile"), "model_info": data.get("model_info") or {}})
+    size_b = 0
+    try:
+        size_b = int((data.get("size") or details.get("parameter_size") or 0) or 0)
+    except (TypeError, ValueError):
+        size_b = 0
+    used_vram = 0
+    try:
+        ps = _ollama_httpx.get("/api/ps").json()
+        used_vram = sum(int(m.get("size_vram") or 0) for m in (ps.get("models") or []) if isinstance(m, dict))
+    except Exception:
+        used_vram = 0
+    free = max(0, int(VRAM_TOTAL_BYTES) - used_vram)
+    import backend.settings as _s
+    fit = _s.suggest_num_ctx(req.model, context_max=ctx_max, size_bytes=size_b, vram_free=free)
+    vision = model_supports_vision(req.model, {**data, **details, "family": details.get("family"), "capabilities": data.get("capabilities")})
     return {
         "ok": True,
         "model": req.model,
@@ -587,6 +616,13 @@ def api_model_show(req: ModelNameRequest) -> Dict[str, Any]:
         "families": details.get("families"),
         "parameter_size": details.get("parameter_size"),
         "quantization_level": details.get("quantization_level"),
+        "capabilities": data.get("capabilities") or [],
+        "context_length": ctx_max or None,
+        "vision": vision,
+        "suggested_num_ctx": fit.get("num_ctx"),
+        "ctx_source": fit.get("source"),
+        "vram_warn": fit.get("warn") or "",
+        "vram_free": free,
     }
 
 
@@ -888,6 +924,7 @@ class TaskRequest(BaseModel):
     skill: Optional[str] = Field(default=None, max_length=64)
     resume_checkpoint: Optional[str] = Field(default=None, max_length=80)
     project_root: Optional[str] = Field(default=None, max_length=500)
+    images: Optional[List[str]] = None
 
 
 @router.post(Route.TASK)
@@ -1009,6 +1046,19 @@ def api_task(req: TaskRequest) -> StreamingResponse:
     )
     # FASE 4 · YOLO guard
     run.yolo = bool(req.yolo)
+    try:
+        from backend.ollama import strip_image_b64
+        run._images = [strip_image_b64(x) for x in (req.images or []) if str(x).strip()][:4]
+    except Exception:
+        run._images = []
+    if not req.num_ctx:
+        try:
+            import backend.settings as _s
+            by = (_s.load_runtime_settings().get("num_ctx_by_model") or {})
+            if by.get(run.model):
+                run.num_ctx = int(by[run.model])
+        except Exception:
+            pass
 
     # 🧵 hilo adoptado: precargar el transcript previo SIN duplicar el mensaje
     # del usuario — OtterRun.__init__ ya añadió la entrada user y los marcadores

@@ -78,6 +78,7 @@ def route(mensaje: str) -> Dict[str, str]:
                 "prompt": prompt,
                 "system": _CLASSIFY,
                 "stream": False,
+                "format": "json",
                 "keep_alive": "30s",
                 "options": {"num_ctx": 512, "num_predict": 64, "temperature": 0, "num_gpu": 99},
             },
@@ -85,10 +86,16 @@ def route(mensaje: str) -> Dict[str, str]:
         )
         resp.raise_for_status()
         raw = _ollama_ndjson_text(resp.text) or ""
-        m = re.search(r"\{[^{}]+\}", raw)
-        if not m:
-            return base
-        obj = json.loads(m.group(0))
+        obj: Dict[str, Any] = {}
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                obj = parsed
+        except json.JSONDecodeError:
+            m = re.search(r"\{[^{}]+\}", raw)
+            if not m:
+                return base
+            obj = json.loads(m.group(0))
         tipo = str(obj.get("tipo") or "").lower()
         dest = str(obj.get("destino") or "").strip()
         if tipo not in ("directo", "agente", "skill"):
@@ -98,14 +105,30 @@ def route(mensaje: str) -> Dict[str, str]:
         return base
 
 
+def router_is_small(name: str = "") -> bool:
+    n = (name or ROUTER_MODEL or "").lower()
+    return any(tag in n for tag in ("0.5b", "1b", "1.5b", "2b", "3b"))
+
+
 def preload_router() -> None:
-    """Mantiene el modelo router residente (keep_alive -1). No bloquea arranque."""
+    """Mantiene el modelo router residente. No bloquea arranque.
+
+    Con MAX_LOADED_MODELS=1 no convive con el especialista: si hay misión
+    activa no precarga. Si el router es ≤3B, keep_alive corto está bien
+    junto a MAX_LOADED=2 (ver config.warn_ollama_speed_env).
+    """
     if os.environ.get("OTTERCODE_ROUTER", "1") == "0":
         return
     if os.environ.get("OTTERCODE_ROUTER_LLM", "0") == "0":
         return
     if LLM_BACKEND != "ollama":
         return
+    try:
+        from backend.runtime import ACTIVE_RUN
+        if ACTIVE_RUN:
+            return
+    except Exception:
+        pass
 
     def _go() -> None:
         try:

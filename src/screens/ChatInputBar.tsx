@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Square, Sliders, Paperclip, RotateCcw, Skull, Clock, X } from 'lucide-react'
 import { useUi } from '../store'
-import { api, type AgentInfo } from '../api'
+import { api, type AgentInfo, type Profile } from '../api'
 import { F, SLASH_COMMANDS } from '../features'
 import SlashPopup from '../SlashPopup'
 
@@ -47,6 +47,11 @@ export default function ChatInputBar({
   const [agentsList, setAgentsList] = useState<AgentInfo[]>([])
   const [attach, setAttach] = useState<{ name: string; preview?: string }[]>([])
   const [dragOver, setDragOver] = useState(false)
+  const [visionOk, setVisionOk] = useState(true)
+  const [health, setHealth] = useState('online')
+  const [profiles, setProfiles] = useState<Profile[]>([])
+  const [activeProf, setActiveProf] = useState('')
+  const model = useUi((s) => s.model)
 
   const ingestFiles = (list: File[]) => {
     const MAX_IMG = 1_000_000
@@ -61,7 +66,7 @@ export default function ChatInputBar({
         reader.onload = (event) => {
           const data = String(event.target?.result || '')
           setAttach((a) => [...a, { name: file.name, preview: data }])
-          setTask((prev) => prev + `\n[Imagen adjunta: ${file.name} — el modelo recibe el nombre, no los píxeles]\n`)
+          setTask((prev) => prev + `\n[Imagen adjunta: ${file.name}]\n`)
         }
         reader.readAsDataURL(file)
       } else {
@@ -99,6 +104,33 @@ export default function ChatInputBar({
         }
       })
       .catch(() => undefined)
+    api.profiles()
+      .then((r) => {
+        setProfiles(r.profiles || [])
+        setActiveProf(r.active || '')
+      })
+      .catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    if (!model) return
+    api.showModel(model).then((info) => {
+      setVisionOk(Boolean(info.vision) || /llava|vision|moondream|minicpm-v/i.test(model))
+    }).catch(() => setVisionOk(/llava|vision|moondream|minicpm-v/i.test(model)))
+  }, [model])
+
+  useEffect(() => {
+    let on = true
+    const tick = () => {
+      api.pulse().then((p) => {
+        if (!on) return
+        const h = (p as { ollama_health?: string }).ollama_health
+        setHealth(h || (p.ok ? 'online' : 'down'))
+      }).catch(() => { if (on) setHealth('down') })
+    }
+    tick()
+    const id = window.setInterval(tick, 8000)
+    return () => { on = false; window.clearInterval(id) }
   }, [])
 
   useEffect(() => {
@@ -245,6 +277,10 @@ export default function ChatInputBar({
     const fields: Record<string, unknown> = { ...parsed.fields }
     if (!fields.start_agent) fields.start_agent = startAgent
 
+    const images = attach.map((a) => a.preview).filter(Boolean).slice(0, 4)
+    if (images.length && !visionOk) {
+      useUi.getState().setNotice('Este modelo no declara visión: las imágenes pueden ignorarse.')
+    }
     try {
       onLaunch({
         ...fields,
@@ -255,6 +291,8 @@ export default function ChatInputBar({
         max_rounds: loopMode ? maxRounds : undefined,
         hacker,
         yolo: yolo || Boolean(parsed.fields.yolo),
+        images,
+        profile: activeProf || undefined,
       })
     } catch (e) {
       useUi.getState().setNotice((e as Error).message || 'No se pudo enviar')
@@ -323,6 +361,26 @@ export default function ChatInputBar({
 
         {/* Barra superior de ajustes rápidos */}
         <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+          <span
+            className={`h-2 w-2 shrink-0 rounded-full ${health === 'online' ? 'bg-accent' : health === 'loading' ? 'bg-muted' : 'bg-danger'}`}
+            title={health === 'online' ? 'Ollama en línea' : health === 'loading' ? 'Cargando modelo' : 'Ollama caído'}
+          />
+          {profiles.length > 0 && (
+            <select
+              aria-label="Perfil"
+              value={activeProf}
+              onChange={(e) => {
+                const n = e.target.value
+                setActiveProf(n)
+                void api.setActiveProfile(n).catch((err: Error) => useUi.getState().setNotice(err.message))
+              }}
+              className="cursor-pointer rounded-lg border border-line bg-panel2 px-2 py-1 text-[10px] font-semibold text-ink focus:outline-none"
+            >
+              {profiles.map((pr) => (
+                <option key={pr.name} value={pr.name}>{pr.display_name || pr.name}</option>
+              ))}
+            </select>
+          )}
           {/* Selector de modo explícito */}
           <select
             id="modeSel2"

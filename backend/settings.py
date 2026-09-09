@@ -37,6 +37,7 @@ SETTINGS_DEFAULTS: Dict[str, Any] = {
     "mirostat": 0,                    # 0=off 1= 2=
     "mirostat_eta": 0.1,
     "mirostat_tau": 5.0,
+    "num_ctx_by_model": {},
 }
 
 _SETTINGS: Dict[str, Any] = {}
@@ -64,7 +65,7 @@ def load_runtime_settings() -> Dict[str, Any]:
             data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 for k, v in data.items():
-                    if k in merged or k in ("ctx_speed_floor",):
+                    if k in merged or k in ("ctx_speed_floor", "num_ctx_by_model"):
                         merged[k] = v
     except (json.JSONDecodeError, OSError):
         pass
@@ -145,3 +146,52 @@ def build_options(run: Any) -> Dict[str, Any]:
     if int(keep) > 0:
         opts["num_keep"] = int(keep)
     return opts
+
+
+def suggest_num_ctx(
+    model: str,
+    *,
+    context_max: int = 0,
+    size_bytes: int = 0,
+    vram_free: int = 0,
+) -> Dict[str, Any]:
+    """num_ctx seguro: bench guardado > heurística VRAM > techo del modelo."""
+    rec = 0
+    source = "heuristic"
+    try:
+        from backend.ctx_bench import bench_for_model
+        b = bench_for_model(model)
+        if b and int(b.get("recommended") or 0) >= 2048:
+            rec = int(b["recommended"])
+            source = "bench"
+    except Exception:
+        rec = 0
+    if rec <= 0:
+        free = int(vram_free or 0)
+        if free >= 10 * 1024 ** 3:
+            rec = 32768
+        elif free >= 6 * 1024 ** 3:
+            rec = 16384
+        elif free >= 3 * 1024 ** 3:
+            rec = 8192
+        else:
+            rec = 4096
+        if size_bytes and free and size_bytes > free * 0.85:
+            rec = min(rec, 4096)
+    cap = int(context_max or 0) or 131072
+    rec = max(2048, min(int(rec), cap, 131072))
+    warn = ""
+    if size_bytes and vram_free and size_bytes + rec * 2000 > vram_free:
+        warn = (
+            f"num_ctx={rec} puede no caber en VRAM libre "
+            f"({vram_free / 1024 ** 3:.1f} GB libres, modelo "
+            f"{size_bytes / 1024 ** 3:.1f} GB)."
+        )
+    return {"num_ctx": rec, "source": source, "context_max": cap, "warn": warn}
+
+
+def set_num_ctx_for_model(model: str, num_ctx: int) -> Dict[str, Any]:
+    s = load_runtime_settings()
+    by = dict(s.get("num_ctx_by_model") or {})
+    by[str(model)] = int(num_ctx)
+    return save_runtime_settings({"num_ctx_by_model": by, "num_ctx": int(num_ctx)})

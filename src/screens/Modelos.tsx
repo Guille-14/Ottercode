@@ -3,7 +3,7 @@
 // (borrar / copiar).
 import { useEffect, useRef, useState } from 'react'
 import { Box, CloudDownload, Trash2, Copy, Cpu } from 'lucide-react'
-import { api, type Pulse } from '../api'
+import { api, fetchWithAuth, type Pulse } from '../api'
 import { useUi } from '../store'
 import { Badge, Card } from '../ui'
 import ConfirmDialog from '../ConfirmDialog'
@@ -26,6 +26,10 @@ export default function Modelos() {
   const [confirmName, setConfirmName] = useState<string | null>(null)
   const [undoName, setUndoName] = useState<string | null>(null)
   const undoRef = useRef<number | null>(null)
+  const [info, setInfo] = useState<Record<string, { family?: string; parameter_size?: string; quantization_level?: string; context_length?: number; vision?: boolean; suggested_num_ctx?: number; vram_warn?: string }>>({})
+  const [createName, setCreateName] = useState('')
+  const [modelfile, setModelfile] = useState('FROM qwen2.5-coder:7b\nPARAMETER num_ctx 8192\n')
+  const [creating, setCreating] = useState(false)
 
   const reload = async () => {
     try {
@@ -195,6 +199,43 @@ export default function Modelos() {
       </Card>
 
       <Card className="p-4">
+        <h2 className="mb-3 text-sm font-semibold">Crear desde Modelfile</h2>
+        <input
+          className="mb-2 w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm"
+          placeholder="nombre (ej. otter-coder:local)"
+          value={createName}
+          onChange={(e) => setCreateName(e.target.value)}
+          disabled={creating}
+        />
+        <textarea
+          className="mb-2 min-h-[88px] w-full rounded-lg border border-line bg-canvas px-3 py-2 font-mono text-xs"
+          value={modelfile}
+          onChange={(e) => setModelfile(e.target.value)}
+          disabled={creating}
+        />
+        <button
+          type="button"
+          disabled={!createName.trim() || !modelfile.trim() || creating}
+          onClick={() => {
+            const name = createName.trim()
+            setCreating(true)
+            void fetchWithAuth('/api/models/create', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model: name, modelfile }),
+            }).then(async (r) => {
+              if (!r.ok) throw new Error(`HTTP ${r.status}`)
+              setCreateName('')
+              await reload()
+            }).catch((e: Error) => setErr(e.message)).finally(() => setCreating(false))
+          }}
+          className="inline-flex h-9 items-center rounded-lg bg-accent px-3 text-sm font-medium text-accentink disabled:opacity-40"
+        >
+          {creating ? 'Creando…' : 'Crear modelo'}
+        </button>
+      </Card>
+
+      <Card className="p-4">
         <h2 className="mb-3 text-sm font-semibold">Disponibles ({models.length})</h2>
         {models.length === 0 ? (
           <p className="text-sm text-muted">No se pudo consultar Ollama.</p>
@@ -221,6 +262,11 @@ export default function Modelos() {
                         <span className="oc-mono">{fmtBytes(gpu.size_vram)}</span>
                       </Badge>
                     )}
+                    {info[m]?.family && <span className="text-[10px] text-muted">{info[m].family}</span>}
+                    {info[m]?.parameter_size && <span className="text-[10px] text-muted">{info[m].parameter_size}</span>}
+                    {info[m]?.quantization_level && <span className="text-[10px] text-muted">{info[m].quantization_level}</span>}
+                    {info[m]?.context_length ? <span className="text-[10px] text-muted">ctx {info[m].context_length}</span> : null}
+                    {info[m]?.vision ? <Badge tone="ok">visión</Badge> : null}
                   </div>
                   <div className="flex shrink-0 gap-1">
                     <button

@@ -203,6 +203,68 @@ def invalidate_models_cache() -> None:
     _models_cache = None
 
 
+_VISION_MARKERS = (
+    "llava", "llama3.2-vision", "llama3.2-vision", "qwen2-vl", "qwen2.5vl",
+    "qwen2.5-vl", "gemma3", "minicpm-v", "minicpmv", "moondream", "granite-vision",
+    "vision",
+)
+
+
+def model_supports_vision(model: str, show: Optional[Dict[str, Any]] = None) -> bool:
+    name = (model or "").lower()
+    if any(m in name for m in _VISION_MARKERS):
+        return True
+    if not isinstance(show, dict):
+        return False
+    caps = show.get("capabilities") or (show.get("details") or {}).get("capabilities") or []
+    blob = " ".join(str(c).lower() for c in (caps if isinstance(caps, list) else [caps]))
+    fam = str((show.get("family") or (show.get("details") or {}).get("family") or "")).lower()
+    return "vision" in blob or any(m in fam for m in _VISION_MARKERS)
+
+
+def parse_context_length(show: Dict[str, Any]) -> int:
+    """num_ctx máximo declarado por /api/show (model_info / parameters)."""
+    info = show.get("model_info") or show.get("modelinfo") or {}
+    if isinstance(info, dict):
+        for k, v in info.items():
+            if "context_length" in str(k).lower() or str(k).endswith(".context_length"):
+                try:
+                    n = int(v)
+                    if n >= 512:
+                        return n
+                except (TypeError, ValueError):
+                    pass
+    params = str(show.get("parameters") or "")
+    m = re.search(r"num_ctx\s+(\d+)", params, re.I)
+    if m:
+        return max(512, int(m.group(1)))
+    mf = str(show.get("modelfile") or "")
+    m2 = re.search(r"PARAMETER\s+num_ctx\s+(\d+)", mf, re.I)
+    if m2:
+        return max(512, int(m2.group(1)))
+    return 0
+
+
+def strip_image_b64(raw: str) -> str:
+    s = (raw or "").strip()
+    if "," in s and s.lower().startswith("data:"):
+        s = s.split(",", 1)[1]
+    return re.sub(r"\\s+", "", s)
+
+
+def _with_images(messages: List[Dict[str, Any]], images: List[str]) -> List[Dict[str, Any]]:
+    if not images:
+        return messages
+    out = [dict(m) for m in messages]
+    for m in reversed(out):
+        if (m.get("role") or "") == "user":
+            m["images"] = images
+            break
+    else:
+        out.append({"role": "user", "content": "(imagen)", "images": images})
+    return out
+
+
 def resolve_coder_model(requested: str = "") -> str:
     """Si el modelo pedido no está en /api/tags, usa DEFAULT_MODEL o el primero."""
     want = (requested or DEFAULT_MODEL or "").strip()
@@ -539,14 +601,16 @@ def _llm_request(run: Any, system_prompt: str, prompt: str, agent_id: str = "") 
                 "options": _otter_settings.build_options(run),
             },
         )
-    _messages: List[Dict[str, str]] = []
+    _messages: List[Dict[str, Any]] = []
     if system_prompt:
         _messages.append({"role": "system", "content": system_prompt})
     _hist = getattr(run, "messages", None)
     if _hist:
-        _messages.extend(_hist)
+        _messages.extend(list(_hist))
     else:
         _messages.append({"role": "user", "content": prompt})
+    if imgs:
+        _messages = _with_images(_messages, imgs)
     payload = {
         "model": run.model, "messages": _messages, "stream": True,
         "keep_alive": keep,

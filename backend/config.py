@@ -217,7 +217,7 @@ APP_VERSION = "3.0.0"
 OLLAMA_SPEED_ENV = {
     "OLLAMA_FLASH_ATTENTION": "1",
     "OLLAMA_KV_CACHE_TYPE": "q8_0",
-    "OLLAMA_MAX_LOADED_MODELS": "1",
+    "OLLAMA_MAX_LOADED_MODELS": "1",  # 2 solo si el router es ≤3B (ver warn)
     "OLLAMA_NUM_PARALLEL": "1",
     "OLLAMA_NUM_GPU": "99",
 }
@@ -230,7 +230,11 @@ def warn_ollama_speed_env() -> List[str]:
     claves ausentes o con valor distinto al recomendado.
     """
     missing: List[str] = []
-    for key, want in OLLAMA_SPEED_ENV.items():
+    rec = dict(OLLAMA_SPEED_ENV)
+    router = os.environ.get("OTTERCODE_ROUTER_MODEL", "qwen2.5:1.5b")
+    if any(tag in (router or "").lower() for tag in ("0.5b", "1b", "1.5b", "2b", "3b")):
+        rec["OLLAMA_MAX_LOADED_MODELS"] = "2"
+    for key, want in rec.items():
         got = os.environ.get(key, "").strip()
         if got != want:
             missing.append(f"{key}={want} (actual={got or 'unset'})")
