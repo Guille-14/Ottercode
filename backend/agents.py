@@ -168,10 +168,11 @@ BASE_AGENT: str = (
     "No sustituyas la tarea por un demo ni por una web de nutrias.\n"
     "Eres Otter, ingeniero de software en el workspace del usuario. estilo Claude Code.\n"
     "1. LEE antes de editar (read_file / list_dir).\n"
-    "2. apply_patch o edit_file para cambios; write_file para archivos nuevos o reescrituras pedidas.\n"
-    "3. Tras editar: execute_bash (tests/compile: pytest, npm test, py_compile).\n"
-    "4. Una tool por paso. Prohibido volcar HTML/código entero en el chat.\n"
-    "5. Al terminar: finalizar con un resumen breve.\n"
+    "2. Si el archivo YA EXISTE: PROHIBIDO write_file (trunca a 4096 tokens y deja el disco intacto). "
+    "OBLIGATORIO edit_file (old_string EXACTO + new_string) o apply_patch. Varios edit_file por sección.\n"
+    "3. write_file SOLO para archivos NUEVOS y cortos (≤120 líneas). Grandes: write_file 1ª parte + append_file.\n"
+    "4. Tras editar: execute_bash (tests/compile). Una tool por paso. Prohibido volcar HTML en el chat.\n"
+    "5. Al terminar: finalizar con un resumen breve. No digas que escribiste un archivo si la tool falló.\n"
 )
 
 # v4.1 · /goal: objetivo mayor del usuario inyectado en TODOS los agentes
@@ -222,7 +223,7 @@ def tool_protocol(tool_names: List[str], native: bool = False) -> str:
             "Usa function calling; no emitas JSON de tools en el texto.\n"
             f"Tools: {names}, finalizar.\n"
             "1) LEE (read_file/list_dir) antes de editar.\n"
-            "2) edit_file o apply_patch para cambios; write_file SOLO archivos nuevos cortos.\n"
+            "2) Archivo existente: SOLO edit_file/apply_patch. write_file SOLO archivos nuevos cortos.\n"
             "3) Tras editar, execute_bash para tests/compile.\n"
             "4) Una tool por paso. Prohibido dump de HTML/código en el chat.\n"
         )
@@ -245,9 +246,10 @@ def tool_protocol(tool_names: List[str], native: bool = False) -> str:
         "REGLAS DE USO DE SKILLS:",
         "- Un SOLO objeto JSON de skill por respuesta.",
         "- Las rutas son RELATIVAS al workspace de la tarea (nunca absolutas).",
-        "- ARCHIVOS GRANDES (>~120 líneas): escríbelos POR PARTES — write_file para "
-        "la 1ª parte (≤150 líneas) y append_file para las siguientes. NUNCA intentes "
-        "meter el archivo entero en una sola llamada ni pegues código fuera del JSON.",
+        "- ARCHIVO EXISTENTE: PROHIBIDO write_file. Usa edit_file con old_string copiado "
+        "literal del disco (read_file primero). Si edit_file falla, reintenta con el snippet.",
+        "- ARCHIVOS NUEVOS GRANDES (>~120 líneas): POR PARTES — write_file 1ª parte (≤150 líneas) "
+        "y append_file. NUNCA el archivo entero en una sola llamada ni código fuera del JSON.",
         "- El JSON debe ser 100% válido: dentro de cadenas, escapa comillas (\\\") y saltos de línea (\\n).",
         "- Tras cada llamada recibirás el RESULTADO por texto: emite la siguiente skill o 'finalizar'.",
         "- Al completar tu objetivo emite: {\"tool\": \"finalizar\", \"arguments\": {\"resumen\": \"...\"}}",

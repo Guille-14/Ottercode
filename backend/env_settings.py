@@ -15,7 +15,7 @@ class OtterEnv(BaseModel):
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
     model: str = "qwen2.5-coder:7b"
-    num_ctx: int = Field(default=16384, ge=1024, le=131072)
+    num_ctx: int = Field(default=32768, ge=1024, le=131072)
     num_predict: int = Field(default=4096, ge=64, le=131072)
     keep_alive: str = "15m"
     ask_permissions: str = "1"

@@ -19,6 +19,7 @@ export type SseName =
   | 'loop_iter'
   | 'loop_exhausted'
   | 'diff'
+  | 'file_updated'
   | 'perm_request'
   | 'ctx_hint'
 

@@ -168,7 +168,7 @@ VRAM_TOTAL_BYTES: int = _detect_vram_total()
 # El KV-cache se dimensiona con num_ctx: un Modelfile con num_ctx=64000 sobre
 # una GPU de 8 GB fuerza offload a CPU (1-4 tok/s). Enviamos SIEMPRE options
 # explícitos para mantener el contexto dentro de la VRAM.
-NUM_CTX_DEFAULT = int(os.environ.get("OTTERCODE_NUM_CTX", "16384"))
+NUM_CTX_DEFAULT = int(os.environ.get("OTTERCODE_NUM_CTX", "32768"))
 NUM_PREDICT_DEFAULT = int(os.environ.get("OTTERCODE_NUM_PREDICT", "4096"))
 KEEP_ALIVE_DEFAULT = os.environ.get("OTTERCODE_KEEP_ALIVE", "15m")
 SANDBOX_REQUIRED = os.environ.get("OTTERCODE_SANDBOX_REQUIRED", "1").strip().lower() not in ("0", "false", "no")

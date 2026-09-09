@@ -58,6 +58,7 @@ interface UiState {
   sessionTitles: Record<string, string>
   settingsSection: string
   notice: string
+  fileTick: { path: string; version: number } | null
   setView: (v: string) => void
   setSettingsSection: (s: string) => void
   setNotice: (s: string) => void
@@ -132,6 +133,7 @@ export const useUi = create<UiState>()(
       sessionTitles: {},
       settingsSection: 'parametros',
       notice: '',
+      fileTick: null,
       setSettingsSection: (s) => set({ settingsSection: s }),
       setNotice: (s) => set({ notice: s }),
       setView: (v) => {
@@ -289,6 +291,11 @@ export const useUi = create<UiState>()(
             }
             if (ev.name === 'ctx_hint') {
               set({ ctxHint: ev.data as UiState['ctxHint'] })
+            }
+            if (ev.name === 'file_updated') {
+              const p = String(ev.data.path || ev.data.filepath || '')
+              const v = Number(ev.data.version || Date.now())
+              if (p) set({ fileTick: { path: p, version: v } })
             }
             if (ev.name === 'token') {
               pushTokenTime()

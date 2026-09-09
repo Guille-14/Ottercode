@@ -347,6 +347,15 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                                       "tool": event["name"], "args": event["args"], "title": f"🛠️ {event['name']}"})
                         elif event["kind"] == "result":
                             yield sse(SseEvent.tool_result, {"tool": event["name"], "ok": event["ok"], "output": event["output"]})
+                            if event.get("ok") and event["name"] in ("write_file", "edit_file", "apply_patch", "append_file"):
+                                _nfp = str((event.get("args") or {}).get("filepath") or (call.get("function") or {}).get("arguments") or "")
+                                _args_n = event.get("args") if isinstance(event.get("args"), dict) else {}
+                                _nfp = str(_args_n.get("filepath") or _args_n.get("path") or "")
+                                if _nfp:
+                                    yield sse(SseEvent.file_updated, {
+                                        "path": _nfp, "tool": event["name"],
+                                        "version": int(time.time() * 1000),
+                                    })
                             if event.get("ok") and event["name"] in ("write_file", "edit_file", "apply_patch") and "```diff" in str(event.get("output") or ""):
                                 yield sse(SseEvent.diff, {"path": "", "diff": event["output"], "tool": event["name"]})
                             run.messages.append({
@@ -592,6 +601,14 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                     "path": str(args.get("filepath") or args.get("path") or ""),
                     "diff": _out,
                     "tool": tool_name,
+                })
+        if result.get("ok") and tool_name in ("write_file", "append_file", "edit_file", "apply_patch"):
+            _fp = str(args.get("filepath") or args.get("path") or "")
+            if _fp:
+                yield sse(SseEvent.file_updated, {
+                    "path": _fp,
+                    "tool": tool_name,
+                    "version": int(time.time() * 1000),
                 })
         if result.get("ok") and tool_name in ("write_file", "append_file", "edit_file"):
             try:

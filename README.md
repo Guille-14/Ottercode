@@ -43,7 +43,7 @@ Abre `http://127.0.0.1:8000`.
 | `OTTERCODE_PORT` | `8000` | Puerto HTTP |
 | `OTTERCODE_MODEL` | `qwen2.5-coder:7b` | Coder por defecto (si no está, primer modelo de `/api/tags`) |
 | `OTTERCODE_API` | deprecado | Si vale `ollama`/`openai`, fallback de `OTTERCODE_LLM_BACKEND`. Si parece URL, se ignora. |
-| `OTTERCODE_NUM_CTX` | `16384` | Contexto (8 GB) |
+| `OTTERCODE_NUM_CTX` | `32768` | Contexto (FLASH_ATTENTION + KV q8_0 en 8 GB) |
 | `OTTERCODE_NUM_PREDICT` | `4096` | Tope de generación |
 | `OTTERCODE_KEEP_ALIVE` | `15m` | KV del coder en VRAM |
 | `OTTERCODE_ASK_PERMISSIONS` | `1` | Confirmar tools peligrosas |

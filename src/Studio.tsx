@@ -183,6 +183,21 @@ export default function Studio() {
       .catch((e) => setLoadErr((e as Error).message))
   }, [taskId, openPath])
 
+  const fileTick = useUi((s) => s.fileTick)
+  useEffect(() => {
+    if (!taskId || !openPath || !fileTick) return
+    const tickPath = fileTick.path.replace(/\\/g, '/').replace(/^\/+/, '')
+    const cur = openPath.replace(/\\/g, '/').replace(/^\/+/, '')
+    if (tickPath !== cur && !cur.endsWith(tickPath) && !tickPath.endsWith(cur)) return
+    fetchWithAuth(api.fileUrl(taskId, openPath))
+      .then((r) => (r.ok ? r.text() : Promise.reject()))
+      .then((t) => {
+        setContent(t)
+        setSaved(t)
+      })
+      .catch(() => undefined)
+  }, [fileTick, taskId, openPath])
+
   const dirty = content !== saved
   const handleSave = () => {
     if (!taskId || !openPath || !dirty) return

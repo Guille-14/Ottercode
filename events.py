@@ -113,6 +113,7 @@ class SseEvent(Enum):
     perm_request = auto()
     ctx_hint = auto()
     diff = auto()
+    file_updated = auto()
 
 def sse(event: SseEvent, data: Dict[str, Any]) -> str:
     """Formatea un evento Server-Sent Events usando el enum centralizado."""

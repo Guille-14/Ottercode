@@ -67,8 +67,8 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     # ── FS ──
     "read_file":    {"cat": "FS", "writes_fs": False, "desc": "Lee un archivo del workspace",
                      "example": '{"tool": "read_file", "arguments": {"filepath": "ruta/relativa"}}'},
-    "write_file":   {"cat": "FS", "writes_fs": True, "desc": "Crea o sobrescribe un archivo (contenido COMPLETO)",
-                     "example": '{"tool": "write_file", "arguments": {"filepath": "ruta/relativa", "content": "CONTENIDO"}}'},
+    "write_file":   {"cat": "FS", "writes_fs": True, "desc": "Crea un archivo NUEVO (contenido completo). PROHIBIDO si el archivo ya existe: usa edit_file",
+                     "example": '{"tool": "write_file", "arguments": {"filepath": "ruta/nueva.py", "content": "CONTENIDO"}}'},
     "append_file":  {"cat": "FS", "writes_fs": True, "desc": "AÑADE contenido al final de un archivo (lo crea si no existe). Para archivos grandes: escribe POR PARTES",
                      "example": '{"tool": "append_file", "arguments": {"filepath": "index.html", "content": "<!-- siguiente parte -->"}}'},
     "mkdir":        {"cat": "FS", "writes_fs": True, "desc": "Crea un directorio (con padres si hacen falta)",
@@ -496,6 +496,22 @@ class ToolExecutor:
             except OSError:
                 old = ""
         new = str(content)
+        allow_ow = os.environ.get("OTTERCODE_ALLOW_OVERWRITE", "0").strip().lower() in ("1", "true", "yes")
+        if existed and old.strip() and len(old) > 40 and not allow_ow:
+            snippet = "\n".join(old.splitlines()[:50])[:2500]
+            raise ToolError(
+                json.dumps({
+                    "status": "error",
+                    "reason": "file_exists_use_edit_file",
+                    "path": str(path.relative_to(self.workdir)),
+                    "file_snippet": snippet,
+                    "hint": (
+                        "PROHIBIDO write_file sobre un archivo que ya existe "
+                        "(NUM_PREDICT trunca y el disco no cambia). "
+                        "Usa edit_file con old_string EXACTO de file_snippet."
+                    ),
+                }, ensure_ascii=False)
+            )
         path.write_text(new, encoding="utf-8")
         rel = path.relative_to(self.workdir)
         if not existed or not old:
@@ -1198,16 +1214,39 @@ class ToolExecutor:
                 new_text = norm_text.replace(norm_old, replacement_text, 1)
             else:
                 # Fuzzy matching para tolerar ligeras diferencias de indentación del LLM
-                matcher = difflib.SequenceMatcher(None, norm_text, norm_old)
-                match = matcher.find_longest_match(0, len(norm_text), 0, len(norm_old))
-                if match.size > len(norm_old) * 0.85:
-                    matched_slice = norm_text[match.a:match.a + match.size]
-                    new_text = norm_text[:match.a] + replacement_text + norm_text[match.a + match.size:]
+                collapsed = re.sub(r"\s+", " ", norm_text)
+                collapsed_old = re.sub(r"\s+", " ", norm_old)
+                if collapsed_old and collapsed_old in collapsed:
+                    # Reinyectar el bloque real más cercano (primera línea del old)
+                    first = (norm_old.splitlines() or [""])[0].strip()
+                    idx = next((i for i, ln in enumerate(text.splitlines()) if first and first in ln), -1)
+                    if idx >= 0:
+                        block = "\n".join(text.splitlines()[idx:idx + max(1, len(norm_old.splitlines()))])
+                        new_text = text.replace(block, replacement_text, 1)
+                    else:
+                        new_text = None
                 else:
-                    head = text[:300].strip()
-                    raise ToolError(
-                        f"'old_string' no aparece en {filepath} (ni con coincidencia difusa). Inicio del archivo:\n{head}"
-                    )
+                    new_text = None
+                if new_text is None:
+                    matcher = difflib.SequenceMatcher(None, norm_text, norm_old)
+                    match = matcher.find_longest_match(0, len(norm_text), 0, len(norm_old))
+                    thresh = max(12, int(len(norm_old) * 0.72))
+                    if match.size >= thresh:
+                        new_text = norm_text[:match.a] + replacement_text + norm_text[match.a + match.size:]
+                    else:
+                        snippet = "\n".join(text.splitlines()[:50])[:2500]
+                        raise ToolError(
+                            json.dumps({
+                                "status": "error",
+                                "reason": "old_string not found",
+                                "path": filepath,
+                                "file_snippet": snippet,
+                                "hint": (
+                                    "Copia old_string EXACTO de file_snippet (indentación y saltos) "
+                                    "y reintenta edit_file. No uses write_file."
+                                ),
+                            }, ensure_ascii=False)
+                        )
 
         target.write_text(new_text, encoding="utf-8")
         diff_lines = list(difflib.unified_diff(
