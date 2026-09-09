@@ -81,13 +81,22 @@ function buildSeg(
   return seg
 }
 
-function buildSegs(mission: MissionEvent[]): Seg[] {
-  const out: Seg[] = []
+type TimelineItem =
+  | { kind: 'user'; key: string; text: string }
+  | { kind: 'seg'; key: string; seg: Seg }
+
+function buildTimeline(mission: MissionEvent[]): TimelineItem[] {
+  const out: TimelineItem[] = []
   let i = 0
   while (i < mission.length) {
     const ev = mission[i]
+    if (ev.name === 'user' && ev.data.text) {
+      out.push({ kind: 'user', key: `user:${ev.id}`, text: String(ev.data.text) })
+      i++
+      continue
+    }
     if (ev.name === 'system') {
-      out.push({
+      const seg: Seg = {
         key: `sys:${ev.id}`,
         type: 'system',
         agent: 'Otter',
@@ -96,7 +105,8 @@ function buildSegs(mission: MissionEvent[]): Seg[] {
         tools: [],
         systemText: String(ev.data.text ?? ''),
         missionIndex: i,
-      })
+      }
+      out.push({ kind: 'seg', key: seg.key, seg })
       i++
       continue
     }
@@ -413,13 +423,6 @@ export default function ChatMessageList({
   const boxRef = useRef<HTMLDivElement>(null)
   const _lockAt = useRef(0)
 
-  const initialTask = useMemo(() => {
-    for (const e of mission) {
-      if (e.name === 'task_start' && typeof e.data.task === 'string') return e.data.task
-    }
-    return ''
-  }, [mission])
-
   const lastDone = useMemo(() => {
     for (let i = mission.length - 1; i >= 0; i--) {
       if (isDoneName(mission[i].name)) return mission[i]
@@ -429,7 +432,14 @@ export default function ChatMessageList({
 
   const files = (lastDone?.data.files as unknown[] | undefined) ?? []
 
-  const segs = useMemo(() => buildSegs(mission), [mission])
+  const timeline = useMemo(() => buildTimeline(mission), [mission])
+  const lastSegIdx = useMemo(() => {
+    let n = -1
+    timeline.forEach((it, i) => {
+      if (it.kind === 'seg' && it.seg.type === 'agent') n = i
+    })
+    return n
+  }, [timeline])
 
   // Auto-scroll estilo scroll-lock
   useEffect(() => {
@@ -447,25 +457,38 @@ export default function ChatMessageList({
         _lockAt.current = el.scrollHeight - el.scrollTop - el.clientHeight
       }}
     >
-      {/* Mensaje del Usuario (burbuja derecha) */}
-      {initialTask && (
-        <div className="flex items-start justify-end gap-3">
-          <div className="max-w-[85%] rounded-2xl bg-panel px-4 py-3 text-sm text-ink shadow-sm sm:max-w-2xl">
-            <p className="whitespace-pre-wrap">{initialTask}</p>
-          </div>
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-accentink shadow-sm">
-            <User className="h-4 w-4" />
-          </div>
+      {timeline.map((it, i) => {
+        if (it.kind === 'user') {
+          return (
+            <div key={it.key} className="flex items-start justify-end gap-3">
+              <div className="max-w-[85%] rounded-2xl bg-panel px-4 py-3 text-sm text-ink shadow-sm sm:max-w-2xl">
+                <p className="whitespace-pre-wrap">{it.text}</p>
+              </div>
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-accentink shadow-sm">
+                <User className="h-4 w-4" />
+              </div>
+            </div>
+          )
+        }
+        const seg = it.seg
+        if (seg.type === 'system') {
+          return <SystemBubble key={seg.key} text={seg.systemText ?? ''} />
+        }
+        return (
+          <SegBubble
+            key={seg.key}
+            seg={seg}
+            streaming={streaming}
+            last={i === lastSegIdx}
+            hideLogs={hideLogs}
+          />
+        )
+      })}
+      {streaming && lastSegIdx < 0 && (
+        <div className="flex items-center gap-2 text-xs text-muted">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Otter está pensando en GPU…
         </div>
-      )}
-
-      {/* Burbuts del asistente: una por agente */}
-      {segs.map((seg, i) =>
-        seg.type === 'system' ? (
-          <SystemBubble key={seg.key} text={seg.systemText ?? ''} />
-        ) : (
-          <SegBubble key={seg.key} seg={seg} streaming={streaming} last={i === segs.length - 1} hideLogs={hideLogs} />
-        ),
       )}
 
       <PlanCard mission={mission} taskId={taskId} streaming={streaming} />

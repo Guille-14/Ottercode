@@ -5,7 +5,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import { api, fetchWithAuth } from './api'
 import { parseSse } from './sse'
 import type { StudioTarget } from './features'
-import { convertTranscript } from './mission'
+
 
 
 export interface QueuedItem {
@@ -220,25 +220,38 @@ export const useUi = create<UiState>()(
         get().stopMission(false)
         controller = new AbortController()
         const missionAbort = controller
-        // 🧵 continuidad: si el payload continúa un hilo existente, NO vaciamos
-        // la vista — prefijamos la misión con el transcript previo y luego
-        // iremos haciendo APPEND de los eventos SSE del nuevo turno. Así las
-        // burbujas anteriores se conservan y el nuevo mensaje sigue debajo.
         const contTask =
           typeof payload.continue_task === 'string' && payload.continue_task
             ? payload.continue_task
             : get().taskId
         const keepOngoing = Boolean(contTask) && get().mission.length > 0
+        const taskText = String(payload.task ?? '').trim()
+        const userEv: MissionEvent = {
+          id: ++seq,
+          at: Date.now(),
+          name: 'user',
+          data: { text: taskText },
+        }
+        // Instantáneo: no esperamos historyDetail (eso congelaba la UI).
+        // Conservamos burbujas y añadimos el mensaje del usuario ya.
         if (keepOngoing) {
-          try {
-            const detail = await api.historyDetail(contTask!)
-            const pref = convertTranscript(detail)
-            set({ taskId: contTask, mission: pref, streaming: true, missionError: null })
-          } catch {
-            set({ mission: [], taskId: contTask, streaming: true, missionError: null })
-          }
+          set({
+            taskId: contTask,
+            mission: [...get().mission.filter((e) => !isDoneName(e.name)), userEv],
+            streaming: true,
+            missionError: null,
+            missionStartedAt: Date.now(),
+          })
         } else {
-          set({ mission: [], taskId: null, streaming: true, missionError: null })
+          set({
+            mission: taskText ? [userEv] : [],
+            taskId: null,
+            streaming: true,
+            missionError: null,
+            missionStartedAt: Date.now(),
+            totalTokens: 0,
+            tokensPerSec: 0,
+          })
         }
         const st = get()
         const body = {
@@ -352,7 +365,7 @@ export const useUi = create<UiState>()(
         let rafId = 0
         const rafLoop = () => {
           commit()
-          rafId = requestAnimationFrame(rafLoop)
+          if (get().streaming) rafId = requestAnimationFrame(rafLoop)
         }
         rafId = requestAnimationFrame(rafLoop)
         try {

@@ -551,14 +551,29 @@ function LiveModelBadge() {
   const agent = useUi((s) => s.liveAgent)
   const streaming = useUi((s) => s.streaming)
   const shown = live || model
+  const [gpu, setGpu] = useState('')
+  useEffect(() => {
+    let on = true
+    const tick = () => {
+      api.pulse().then((p) => {
+        if (!on) return
+        const n = p.ps?.length ?? 0
+        setGpu(n > 0 ? `GPU · ${n} modelo${n === 1 ? '' : 's'}` : p.ok ? 'GPU lista' : 'Ollama off')
+      }).catch(() => { if (on) setGpu('sin Ollama') })
+    }
+    tick()
+    const id = window.setInterval(tick, 8000)
+    return () => { on = false; window.clearInterval(id) }
+  }, [])
   return (
     <span
-      className="hidden max-w-[220px] truncate rounded-full border border-line bg-panel2 px-2 py-0.5 text-[10px] font-medium text-muted sm:inline"
-      title="Modelo activo"
+      className="hidden max-w-[280px] truncate rounded-full border border-line bg-panel2 px-2 py-0.5 text-[10px] font-medium text-muted sm:inline"
+      title="Modelo activo · GPU"
     >
-      {streaming ? 'cargando · ' : ''}
+      {streaming ? 'generando · ' : ''}
       {agent ? `${agent} · ` : ''}
       {shown}
+      {gpu ? ` · ${gpu}` : ''}
     </span>
   )
 }

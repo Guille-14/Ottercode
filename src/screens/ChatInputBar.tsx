@@ -427,12 +427,17 @@ export default function ChatInputBar({
             accept="image/*,.py,.js,.json,.md,.rs,.txt,.css,.html"
           />
           <textarea
+            id="chatInput"
+            autoFocus
             className="max-h-48 min-h-[52px] w-full resize-none bg-transparent px-1 py-1 text-sm text-ink placeholder:text-muted focus:outline-none focus-visible:outline-none"
             rows={2}
             value={task}
             onChange={(e) => {
               setTask(e.target.value)
               setSel(0)
+              const el = e.target
+              el.style.height = 'auto'
+              el.style.height = `${Math.min(192, el.scrollHeight)}px`
             }}
             onKeyDown={onKeyDown}
             onPaste={(e) => {
