@@ -210,7 +210,7 @@ export default function App() {
               <Bot className="h-4 w-4" />
             </div>
             <span className="text-sm font-semibold tracking-tight">OtterCode</span>
-            <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] text-muted">v2.6</span>
+            <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[10px] text-muted">v3.0.0</span>
           </div>
           <button type="button" aria-label="Cerrar menú" onClick={() => setSidebarOpen(false)} className="rounded-md p-1 text-muted hover:bg-canvas hover:text-ink md:hidden">
             <Menu className="h-4 w-4" />
@@ -481,7 +481,6 @@ export default function App() {
 function TokenStats() {
   const totalTokens = useUi((s) => s.totalTokens)
   const tokensPerSec = useUi((s) => s.tokensPerSec)
-  if (totalTokens <= 0) return null
   return (
     <span
       id="tokenStats"
