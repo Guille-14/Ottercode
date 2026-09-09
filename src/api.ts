@@ -510,7 +510,6 @@ export const api = {
         body: JSON.stringify({ num_ctx }),
       }),
     ),
->>>>>>> 1586a16 (B1/B2: calibrar num_ctx por GPU y aviso si compacta demasiado.)
   mcp: () =>
     j<{ ok: boolean; ready: boolean; servers: { name: string; connected: boolean; tools: string[] }[]; tools: string[] }>(
       fetchWithAuth(`${BASE}/mcp`),
