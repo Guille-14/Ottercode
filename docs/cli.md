@@ -5,9 +5,9 @@ Misma lógica que la web: `tools.py`, sandbox, RAG, MCP, `run_agent_turn`. La te
 ## Instalación
 
 ```bash
-pip install -e .
-# TUI completa (Textual):
-pip install -e ".[cli]"
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/ottercode chat
 ```
 
 Ejecutable:

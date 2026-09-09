@@ -104,7 +104,9 @@ def handle_slash(state: CliState, cmd: SlashCmd, printer: PrintFn) -> bool:
         printer(status_blob(state))
         return True
     if n == "tools":
-        printer(", ".join(tools.TOOL_NAMES[:40]))  # type: ignore[name-defined]
+        import tools as _tools
+        names = getattr(_tools, "TOOL_NAMES", None) or list(getattr(_tools, "TOOLS", {}) or [])
+        printer(", ".join(str(x) for x in list(names)[:40]))
         return True
     if n == "rag" and a:
         printer(rag_query(state, a))
@@ -125,5 +127,4 @@ def handle_slash(state: CliState, cmd: SlashCmd, printer: PrintFn) -> bool:
     return False
 
 
-# import tools for /tools
-import tools  # noqa: E402
+

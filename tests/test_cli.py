@@ -8,6 +8,16 @@ from ottercode_cli.sessions import list_sessions, load_session, save_session, se
 from ottercode_cli.slash import parse_slash
 
 
+def test_argv_plain_after_chat():
+    from ottercode_cli.main import _parse
+    a = _parse(["chat", "--plain"])
+    assert a.cmd == "chat" and a.plain
+    b = _parse(["--plain", "chat"])
+    assert b.plain and b.cmd == "chat"
+    c = _parse(["edit", "foo.py"])
+    assert c.cmd == "edit" and c.pos == ["foo.py"]
+
+
 def test_parse_slash_help():
     c = parse_slash("/help")
     assert c and c.name == "help"
