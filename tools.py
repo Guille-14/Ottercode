@@ -2005,8 +2005,11 @@ class ToolExecutor:
     def list_workspace(self) -> List[Dict[str, Any]]:
         """Lista los archivos del workspace (relativos) con su tamaño."""
         files: List[Dict[str, Any]] = []
+        skip_parts = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache"}
         for path in sorted(self.workdir.rglob("*")):
             if not path.is_file() or path.name == "ottercode_transcript.json":
+                continue
+            if any(part in skip_parts for part in path.parts):
                 continue
             try:
                 size = path.stat().st_size

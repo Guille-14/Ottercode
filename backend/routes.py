@@ -899,6 +899,12 @@ def api_task(req: TaskRequest) -> StreamingResponse:
         _p = _get_profile(req.profile)
         if _p:
             _task_profile = _p
+    # Bucle sin mode explícito: cadena clásica (selftest T1).
+    # Si el cliente pide mode=chat + loop, el Revisor entra en modo agente (T43a).
+    if req.loop_mode and "mode" not in req.model_fields_set:
+        req.mode = "chain"
+        if "start_agent" not in req.model_fields_set:
+            req.start_agent = "architect"
     if req.mode not in ("chain", "chat"):
         raise HTTPException(status_code=400, detail="mode debe ser 'chain' o 'chat'.")
     if req.mode == "chain" and req.start_agent not in AGENT_ORDER:
@@ -992,7 +998,7 @@ def api_task(req: TaskRequest) -> StreamingResponse:
         req.loop_mode, req.mode, req.start_agent, workdir,
         hacker=bool(req.hacker),
         num_ctx=req.num_ctx or _task_profile.get("num_ctx"),
-        temperature=_task_profile.get("temperature", 0.2),
+        temperature=_task_profile.get("temperature"),
         top_p=_task_profile.get("top_p", 0.9),
         goal=req.goal, plan_only=req.plan_only,
         ultra_review=req.ultra_review, resume_plan=req.resume_plan,

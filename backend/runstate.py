@@ -66,7 +66,7 @@ class OtterRun:
         self.hacker = hacker                  # 🏴 modo sin censura (solo prompt)
         self.num_ctx = num_ctx                # override de contexto (v3.3)
         # FASE 3 · parámetros del perfil activo
-        self.temperature = temperature if temperature is not None else 0.2
+        self.temperature = temperature
         self.top_p = top_p if top_p is not None else 0.9
         # FASE 4 · inyección temporal de sistema (/sys)
         self.system_inject = (system_inject or "").strip()

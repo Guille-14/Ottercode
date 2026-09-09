@@ -7,7 +7,7 @@ const PROMPT_SUGGESTIONS = [
   {
     icon: Compass,
     title: 'Genera una web interactiva',
-    desc: '▶ Genera una web de nutrias marinas',
+    desc: '▶ Crea una app según lo que te pida el usuario',
   },
   {
     icon: Search,

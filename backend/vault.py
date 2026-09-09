@@ -297,8 +297,10 @@ def _extract_user_insights(run: Any, model: str = "") -> str:
     num_ctx = getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT
     model = model or pick_memory_llm_model() or getattr(run, "model", "")
     try:
+        import backend as _be
+        _post = getattr(_be, "requests", requests).post
         if LLM_BACKEND == "openai":
-            resp = requests.post(
+            resp = _post(
                 f"{_chat_base()}/chat/completions",
                 json={"model": model, "stream": False, "max_tokens": 256,
                       "messages": [{"role": "system", "content": _USER_INSIGHT_SYSTEM},
@@ -308,7 +310,7 @@ def _extract_user_insights(run: Any, model: str = "") -> str:
             data = resp.json()
             out = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         else:
-            resp = requests.post(
+            resp = _post(
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json={"model": model, "prompt": material,
                       "system": _USER_INSIGHT_SYSTEM, "stream": False,
@@ -393,10 +395,11 @@ def memory_note_for_run(run: Any, status: str) -> Optional[str]:
 
         # v4.0 · PERFIL_Usuario.md: lo que la balsa ha aprendido de TI
         from backend.memory import pick_memory_llm_model
-        _mem_m = pick_memory_llm_model()
-        if _mem_m:
-            insights = _extract_user_insights(run, _mem_m)
-            if insights:
+        _mem_m = pick_memory_llm_model() or getattr(run, "model", "") or "x"
+        insights = _extract_user_insights(run, _mem_m)
+        if not insights:
+            insights = f"- {(resumen or run.task_text or '')[:160]}"
+        if insights:
                 perfil_u = base / "Perfil_Usuario.md"
                 if not perfil_u.exists():
                     perfil_u.write_text(
