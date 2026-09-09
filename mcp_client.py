@@ -8,8 +8,34 @@ import json
 import asyncio
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+
+class CircuitBreaker:
+    """Abre el circuito tras N fallos; backoff exponencial al reintentar."""
+    def __init__(self, fail_max: int = 3, cooldown: float = 4.0):
+        self.fail_max = fail_max
+        self.cooldown = cooldown
+        self.fails = 0
+        self.open_until = 0.0
+        self._lock = threading.Lock()
+
+    def allow(self) -> bool:
+        with self._lock:
+            return time.monotonic() >= self.open_until
+
+    def success(self) -> None:
+        with self._lock:
+            self.fails = 0
+            self.open_until = 0.0
+
+    def fail(self) -> None:
+        with self._lock:
+            self.fails += 1
+            if self.fails >= self.fail_max:
+                delay = self.cooldown * (2 ** min(self.fails - self.fail_max, 5))
+                self.open_until = time.monotonic() + delay
 
 logger = logging.getLogger("ottercode.mcp")
 
@@ -126,6 +152,7 @@ class MCPManager:
         self.tools_catalog: Dict[str, Dict[str, Any]] = {}
         self._connections: Dict[str, "_McpConnection"] = {}
         self._connected_once = False
+        self.breaker = CircuitBreaker()
         self._load_config()
 
     def _load_config(self):
@@ -158,13 +185,29 @@ class MCPManager:
 
     async def call_tool(self, prefixed_name: str, arguments: Dict[str, Any]) -> Any:
         """Llama a una herramienta MCP por su nombre prefijado."""
+        if not self.breaker.allow():
+            return {"error": "MCP circuit open: reintenta más tarde (backoff)"}
         info = self.tools_catalog.get(prefixed_name)
         if not info:
             return {"error": f"Unknown MCP tool: {prefixed_name}"}
         session = self.sessions.get(info["server"])
         if not session:
             return {"error": f"MCP server '{info['server']}' not connected"}
-        return await session.call_tool(info["original_name"], arguments)
+        delay = 0.4
+        last = None
+        for attempt in range(3):
+            try:
+                last = await session.call_tool(info["original_name"], arguments)
+                if isinstance(last, dict) and last.get("error"):
+                    raise RuntimeError(str(last.get("error")))
+                self.breaker.success()
+                return last
+            except Exception as exc:
+                last = {"error": str(exc)}
+                await asyncio.sleep(delay)
+                delay *= 2
+        self.breaker.fail()
+        return last if last is not None else {"error": "MCP call failed"}
 
     def get_tools_for_agent(self) -> List[Dict[str, Any]]:
         """Devuelve las herramientas MCP en formato compatible con Ollama tools."""

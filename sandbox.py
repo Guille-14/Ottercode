@@ -12,7 +12,10 @@ from typing import List, Tuple
 class SandboxExecutor:
     def __init__(self, workdir: Path, share_net: bool = False):
         self.workdir = Path(workdir).resolve()
-        self.share_net = share_net
+        env_net = os.environ.get("OTTERCODE_SANDBOX_NET", "0").strip().lower() in ("1", "true", "yes")
+        # Por defecto --unshare-net. Red solo si share_net o OTTERCODE_SANDBOX_NET=1
+        # (whitelist efectiva: Ollama/MCP viven FUERA del bwrap, no dentro).
+        self.share_net = bool(share_net or env_net)
         self._bwrap_path = shutil.which("bwrap")
         self._available = self._check_bwrap()
 

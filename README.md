@@ -2,6 +2,18 @@
 
 Agente de código **local** con Ollama: lee el repo, parchea, corre tests. FastAPI + React. Un coder por defecto (modo chat); la cadena de agentes es opcional.
 
+Licencia: [MIT](LICENSE).
+
+```mermaid
+flowchart LR
+  UI[React UI] -->|SSE| API[FastAPI]
+  API --> SQLite[(SQLite WAL)]
+  API --> RAG[RAG BM25+vec]
+  API --> MCP[MCP + breaker]
+  API --> Ollama[Ollama GPU]
+  API --> Bwrap[bwrap no-net]
+```
+
 ## Quickstart
 
 ```bash

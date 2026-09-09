@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from backend.secrets_filter import redact_text
 from events import SseEvent, sse, Route
 
 from backend.config import (
@@ -385,7 +386,7 @@ def stream_llm(
                         if token:
                             collected.append(token)
                             emitted = True
-                            yield sse(SseEvent.token, {"agent": agent_id, "token": token})
+                            yield sse(SseEvent.token, {"agent": agent_id, "token": redact_text(token)})
                         continue
                     try:
                         data = json.loads(text_line)
@@ -421,7 +422,7 @@ def stream_llm(
                     if token:
                         collected.append(token)
                         emitted = True
-                        yield sse(SseEvent.token, {"agent": agent_id, "token": token})
+                        yield sse(SseEvent.token, {"agent": agent_id, "token": redact_text(token)})
             if getattr(run, "_active_resp", None) is resp:
                 run._active_resp = None
             return "".join(collected), stats

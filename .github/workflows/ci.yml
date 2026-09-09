@@ -13,7 +13,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: python -m pip install -e .
-      - run: npm ci && npm run build
+      - run: python -m pip install -e ".[dev]" || python -m pip install -e .
+      - run: python -m pip install mypy bandit || true
+      - run: npm ci && npx tsc --noEmit && npm run build
+      - run: npm audit --audit-level=high || true
+      - run: mypy backend rag.py mcp_client.py sandbox.py --ignore-missing-imports || true
+      - run: bandit -q -r backend rag.py mcp_client.py sandbox.py || true
       - run: OTTERCODE_ASK_PERMISSIONS=0 OTTERCODE_SANDBOX_REQUIRED=0 python dev/selftest.py
       - run: python dev/eval_harness.py

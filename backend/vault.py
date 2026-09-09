@@ -411,6 +411,10 @@ def memory_note_for_run(run: Any, status: str) -> Optional[str]:
                     )
                 with perfil_u.open("a", encoding="utf-8") as fh:
                     fh.write(f"\n## {fecha} — {run.task_text[:70]}\n{insights}\n")
+        try:
+            compact_episodic()
+        except Exception:
+            pass
         return rel_note
     except Exception:  # noqa: BLE001 — la memoria jamás tumba una misión
         return None
@@ -480,3 +484,43 @@ def _memory_recall(task_text: str, max_chars: int = 2400,
         return ""
 
 
+
+
+def compact_episodic(max_notes: int = 40) -> int:
+    """Resume misiones viejas con modelo 1B/3B (o el coder) a un diario compacto."""
+    root = _vault_root_checked()
+    if root is None:
+        return 0
+    misiones = root / _MEM_BASE / "Misiones"
+    if not misiones.is_dir():
+        return 0
+    files = sorted(misiones.glob("*.md"), key=lambda p: p.stat().st_mtime)
+    if len(files) < max_notes:
+        return 0
+    old = files[:-max_notes]
+    blob = "\n\n".join(p.read_text(encoding="utf-8", errors="replace")[:800] for p in old[:30])
+    prompt = "Resume en 12 viñetas las misiones antiguas (hechos, no fluff):\n" + blob[:6000]
+    model = os.environ.get("OTTERCODE_COMPACT_MODEL", "") or "qwen2.5:3b"
+    try:
+        from backend.memory import pick_memory_llm_model
+        model = pick_memory_llm_model() or model
+    except Exception:
+        pass
+    try:
+        resp = requests.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": model, "prompt": prompt, "stream": False,
+                  "options": {"num_predict": 400, "num_gpu": 99}},
+            timeout=(5, 60),
+        )
+        resp.raise_for_status()
+        from backend.ollama import _ollama_ndjson_text
+        out = (_ollama_ndjson_text(resp.text) or "").strip()
+    except Exception:
+        out = ""
+    if not out:
+        return 0
+    dest = root / _MEM_BASE / "Episodico.md"
+    prev = dest.read_text(encoding="utf-8") if dest.exists() else "# Diario episódico\n"
+    dest.write_text(prev + "\n\n## Compactación\n" + out[:4000] + "\n", encoding="utf-8")
+    return len(old)

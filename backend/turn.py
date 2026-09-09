@@ -209,6 +209,14 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         system_prompt = _otter_cfg._SOUL_CONTENT + "\n\n" + system_prompt
     if _otter_cfg._USER_CONTENT:
         system_prompt = system_prompt + "\n\n" + _otter_cfg._USER_CONTENT
+    try:
+        from backend.user_profile import inject_profile_block
+        from backend.config import WORKSPACE_ROOT as _WR
+        _pj = inject_profile_block(_WR)
+        if _pj:
+            system_prompt = system_prompt + _pj
+    except Exception:
+        pass
     
     # INYECCIÓN DE MEMORIA ATÓMICA
     mem = get_memory()

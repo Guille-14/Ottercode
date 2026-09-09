@@ -109,6 +109,25 @@ export function toolArgs(data: Record<string, unknown>): Record<string, unknown>
 }
 
 /** Ruta de archivo objetivo de un frame `tool_call` (filepath/path/file). */
+/** Reintenta un fetch SSE con backoff exponencial (no duplica POST si el caller lo evita). */
+export async function withSseReconnect<T>(
+  fn: () => Promise<T>,
+  tries = 3,
+): Promise<T> {
+  let delay = 400
+  let last: unknown
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn()
+    } catch (e) {
+      last = e
+      await new Promise((r) => setTimeout(r, delay))
+      delay *= 2
+    }
+  }
+  throw last
+}
+
 export function toolCallFilepath(data: Record<string, unknown>): string | null {
   const p = data['filepath'] ?? toolArgs(data)['filepath'] ?? toolArgs(data)['path'] ?? toolArgs(data)['file']
   return typeof p === 'string' && p.trim() ? normPath(p.trim()) : null

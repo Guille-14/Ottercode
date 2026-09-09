@@ -134,6 +134,10 @@ function StudioCodeViewer({
           </button>
         </div>
       </header>
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        <pre className="oc-mono select-none overflow-hidden border-r border-line bg-canvas px-2 py-4 text-right text-[11px] leading-relaxed text-muted" aria-hidden>
+          {code.split('\n').map((_, i) => String(i + 1)).join('\n')}
+        </pre>
       <textarea className="pane-code oc-mono flex-1 resize-none overflow-auto bg-transparent p-4 text-xs leading-relaxed text-ink outline-none"
         value={code} onChange={(e) => onChange(e.target.value)} spellCheck={false}
         onKeyDown={(e) => {
@@ -142,6 +146,7 @@ function StudioCodeViewer({
             onSave()
           }
         }} />
+      </div>
     </div>
   )
 }

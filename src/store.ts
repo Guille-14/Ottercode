@@ -331,7 +331,12 @@ export const useUi = create<UiState>()(
             tokensPerSec: Math.round((tokTimes.length / RATE_WINDOW_MS) * 1000),
           }))
         }
-        const flusher = setInterval(commit, 80)
+        let rafId = 0
+        const rafLoop = () => {
+          commit()
+          rafId = requestAnimationFrame(rafLoop)
+        }
+        rafId = requestAnimationFrame(rafLoop)
         try {
           for (;;) {
             const { done, value } = await reader.read()
@@ -347,7 +352,7 @@ export const useUi = create<UiState>()(
         } catch {
           /* aborted */
         } finally {
-          clearInterval(flusher)
+          cancelAnimationFrame(rafId)
           commit()
           controller = null
           set({ streaming: false })

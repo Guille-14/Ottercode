@@ -1,5 +1,7 @@
 # OtterCode — fábrica de la aplicación FastAPI (estáticos, PWA, tokens)
 from __future__ import annotations
+from backend.env_settings import load_otter_env  # noqa: E402
+load_otter_env()
 import hmac
 import os
 from typing import Any
