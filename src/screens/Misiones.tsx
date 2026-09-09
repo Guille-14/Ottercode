@@ -103,7 +103,7 @@ export default function Misiones({ hideLogs }: { hideLogs: boolean }) {
     <div className="flex h-full min-h-0 flex-col bg-canvas">
       {/* Modal de Aprobación de Permisos (Fase 5) */}
       {pendingPerm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/80 p-4">
           <Card className="w-full max-w-md p-4 shadow-xl">
             <div className="flex items-center gap-2 text-danger">
               <AlertCircle className="h-5 w-5" />

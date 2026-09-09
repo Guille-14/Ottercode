@@ -16,6 +16,7 @@ import TodoPanel from './TodoPanel'
 import CommandPalette from './CommandPalette'
 import HwMonitor from './HwMonitor'
 import ConfirmDialog from './ConfirmDialog'
+import ErrorBoundary from './ErrorBoundary'
 import UndoToast from './UndoToast'
 import Ajustes from './screens/Ajustes'
 import { useUi, isDoneName } from './store'
@@ -411,7 +412,9 @@ export default function App() {
         {view === 'misiones' ? (
           <div className="flex min-h-0 flex-1 flex-col md:flex-row">
             <div className="flex min-w-0 flex-1 flex-col">
-              <Misiones hideLogs={hideLogs} />
+              <ErrorBoundary>
+                <Misiones hideLogs={hideLogs} />
+              </ErrorBoundary>
             </div>
             <TodoPanel />
             {artifactsOpen && (

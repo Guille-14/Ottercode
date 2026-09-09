@@ -117,7 +117,7 @@ export const useUi = create<UiState>()(
       focus: false,
       composerDraft: '',
       model: 'qwen3.5:4b',
-      artifactsOpen: true,
+      artifactsOpen: false,
       artifactsUserClosed: false,
       loopMode: false,
       maxRounds: 8,
@@ -219,6 +219,7 @@ export const useUi = create<UiState>()(
       startMission: async (payload) => {
         get().stopMission(false)
         controller = new AbortController()
+        const missionAbort = controller
         // 🧵 continuidad: si el payload continúa un hilo existente, NO vaciamos
         // la vista — prefijamos la misión con el transcript previo y luego
         // iremos haciendo APPEND de los eventos SSE del nuevo turno. Así las
@@ -245,12 +246,22 @@ export const useUi = create<UiState>()(
           mode: payload.mode ?? st.agentMode ?? 'chat',
           start_agent: payload.start_agent ?? st.startAgent ?? (st.agentMode === 'chain' ? 'architect' : 'agent'),
         }
-        const res = await fetchWithAuth('/api/task', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        })
+        let res: Response
+        try {
+          res = await fetchWithAuth(
+            '/api/task',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+              signal: missionAbort.signal,
+            },
+            0,
+          )
+        } catch (e) {
+          set({ streaming: false, missionError: (e as Error).message || 'No se pudo conectar con el backend' })
+          return
+        }
         if (!res.ok || !res.body) {
           let msg = `HTTP ${res.status}`
           try {
@@ -381,14 +392,15 @@ export const useUi = create<UiState>()(
     }),
     {
       name: 'otter-storage',
-      version: 3,
-      migrate: (persisted, version) => {
-        const p = (persisted || {}) as Record<string, unknown>
-        if (!p.agentMode) p.agentMode = 'chat'
-        if (!p.startAgent) p.startAgent = p.agentMode === 'chain' ? 'architect' : 'agent'
-        if (!p.sessionTitles) p.sessionTitles = {}
-        return p as typeof persisted
-      },
+        version: 4,
+        migrate: (persisted, version) => {
+          const p = (persisted || {}) as Record<string, unknown>
+          if (!p.agentMode) p.agentMode = 'chat'
+          if (!p.startAgent) p.startAgent = p.agentMode === 'chain' ? 'architect' : 'agent'
+          if (!p.sessionTitles) p.sessionTitles = {}
+          if (version < 4) p.artifactsOpen = false
+          return p as typeof persisted
+        },
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         taskId: state.taskId,

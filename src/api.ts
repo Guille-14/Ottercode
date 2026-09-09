@@ -196,13 +196,18 @@ export function fetchWithAuth(
   const headers = new Headers(init.headers)
   if (authToken) headers.set('X-Otter-Token', authToken)
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  let timeoutId = 0
+  if (timeoutMs > 0) {
+    timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+  }
   if (init.signal) {
     if (init.signal.aborted) controller.abort()
     else init.signal.addEventListener('abort', () => controller.abort(), { once: true })
   }
   return rawFetch(url, { ...init, headers, signal: controller.signal }).finally(
-    () => clearTimeout(timeoutId),
+    () => {
+      if (timeoutId) clearTimeout(timeoutId)
+    },
   )
 }
 

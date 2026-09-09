@@ -210,16 +210,20 @@ export default function ChatInputBar({
     const fields: Record<string, unknown> = { ...parsed.fields }
     if (!fields.start_agent) fields.start_agent = startAgent
 
-    onLaunch({
-      ...fields,
-      mode: effMode,
-      goal: effGoal,
-      plan_only: planOnly || Boolean(parsed.fields.plan_only),
-      loop_mode: loopMode,
-      max_rounds: loopMode ? maxRounds : undefined,
-      hacker,
-      yolo: yolo || Boolean(parsed.fields.yolo),
-    })
+    try {
+      onLaunch({
+        ...fields,
+        mode: effMode,
+        goal: effGoal,
+        plan_only: planOnly || Boolean(parsed.fields.plan_only),
+        loop_mode: loopMode,
+        max_rounds: loopMode ? maxRounds : undefined,
+        hacker,
+        yolo: yolo || Boolean(parsed.fields.yolo),
+      })
+    } catch (e) {
+      useUi.getState().setNotice((e as Error).message || 'No se pudo enviar')
+    }
     setTask('')
     setAttach([])
   }
