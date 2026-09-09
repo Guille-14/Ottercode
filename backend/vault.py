@@ -245,18 +245,19 @@ _USER_INSIGHT_SYSTEM = (
 )
 
 
-def _extract_user_insights(run: Any) -> str:
+def _extract_user_insights(run: Any, model: str = "") -> str:
     """Bullets sobre el usuario aprendidos de esta misión ('' si nada)."""
     material = (
         f"TAREA DEL USUARIO: {run.task_text[:600]}\n"
         f"RESULTADO: {_memory_mission_summary(run, 500)}"
     )
     num_ctx = getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT
+    model = model or pick_memory_llm_model() or getattr(run, "model", "")
     try:
         if LLM_BACKEND == "openai":
             resp = requests.post(
                 f"{_chat_base()}/chat/completions",
-                json={"model": run.model, "stream": False, "max_tokens": 256,
+                json={"model": model, "stream": False, "max_tokens": 256,
                       "messages": [{"role": "system", "content": _USER_INSIGHT_SYSTEM},
                                    {"role": "user", "content": material}]},
                 timeout=(10, 90))
@@ -348,8 +349,10 @@ def memory_note_for_run(run: Any, status: str) -> Optional[str]:
                      f"{primera_linea} · [[Misiones/{run.task_id}|detalle]]\n")
 
         # v4.0 · PERFIL_Usuario.md: lo que la balsa ha aprendido de TI
-        if os.environ.get("OTTERCODE_MEMORY_LLM", "0") == "1":
-            insights = _extract_user_insights(run)
+        from backend.memory import pick_memory_llm_model
+        _mem_m = pick_memory_llm_model()
+        if _mem_m:
+            insights = _extract_user_insights(run, _mem_m)
             if insights:
                 perfil_u = base / "Perfil_Usuario.md"
                 if not perfil_u.exists():

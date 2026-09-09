@@ -195,7 +195,6 @@ def native_tools_enabled(model: str) -> bool:
 # Compactación automática: si el turno acumula más caracteres que esto, se
 # resume el trabajo previo y se libera el historial (estilo Claude Code).
 # 30k chars ≈ 8k tokens: prompt + generación conviven holgados en 16k ctx.
-COMPACT_THRESHOLD_CHARS = int(os.environ.get("OTTERCODE_COMPACT_CHARS", "30000"))
 
 # Modo Hacker: libera las ataduras de seguridad del PROMPT del LLM (no toca la
 # denylist de execute_bash ni el guard SSRF: esas protegen TU máquina, no son

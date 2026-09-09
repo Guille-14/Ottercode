@@ -12,7 +12,7 @@ from backend.ctx_bench import load_ctx_bench, stream_benchmark  # noqa: E402
 from backend.history import HISTORY, _append_session_event  # noqa: E402
 from backend.engine import run_task_stream  # noqa: E402
 from backend.db import get_session_detail, search_history  # noqa: E402
-from backend.config import APP_VERSION, COMPACT_THRESHOLD_CHARS, DB_PATH, DEFAULT_MODEL, LLM_BACKEND, MAX_REVIEW_ROUNDS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, SOUL_PATH, USER_PATH, VRAM_TOTAL_BYTES, WORKSPACE_ROOT, _ollama_httpx, _save_identity  # noqa: E402
+from backend.config import APP_VERSION, DB_PATH, DEFAULT_MODEL, LLM_BACKEND, MAX_REVIEW_ROUNDS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, SOUL_PATH, USER_PATH, VRAM_TOTAL_BYTES, WORKSPACE_ROOT, _ollama_httpx, _save_identity  # noqa: E402
 from backend.agents import AGENT_FACTORY_SYSTEM, AGENT_ORDER, CORE_AGENTS, DYNAMIC_AGENTS, _load_skills_cfg, build_profile_prompt, get_agent, normalize_agent_profile, set_skill_enabled  # noqa: E402
 from backend.engine import *  # noqa: F401,F403
 from backend.agents import *  # noqa: F401,F403
@@ -145,7 +145,6 @@ def api_status() -> Dict[str, Any]:
         # v3.3: defaults del motor de rendimiento (UI muestra el selector)
         "num_ctx_default": NUM_CTX_DEFAULT,
         "num_predict_default": NUM_PREDICT_DEFAULT,
-        "compact_chars": COMPACT_THRESHOLD_CHARS,
     }
 
 

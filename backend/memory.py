@@ -93,24 +93,48 @@ def delete_memory_item(item_index: int) -> None:
 
 
 _PREF_RX = re.compile(
-    r"(?i)\b(prefiero|me gusta|usa |no uses |siempre |nunca )\b.{0,80}"
+    r"(?i)\b(prefiero|me gusta|usa |no uses |siempre |nunca |quiero |a menos que )\b.{0,120}"
 )
+
+_SMALL_RX = re.compile(r"(?i)(^|[:/])?(1b|1\.5b|1\.7b|2b|3b)([:\-]|$)")
+_memory_llm_logged = False
+
+
+def pick_memory_llm_model() -> str:
+    """Modelo ≤3B para extraer memoria. Vacío = desactivar LLM (regex)."""
+    global _memory_llm_logged
+    if os.environ.get("OTTERCODE_MEMORY_LLM", "1").strip().lower() in ("0", "false", "no"):
+        return ""
+    try:
+        from backend.ollama import fetch_models
+        names = fetch_models() or []
+    except Exception:
+        names = []
+    hit = ""
+    for n in names:
+        if _SMALL_RX.search(str(n).replace("B", "b")):
+            hit = str(n)
+            break
+    if not hit and not _memory_llm_logged:
+        print("[ottercode] memoria LLM desactivada: no hay modelo 1b/1.5b/3b en Ollama; fallback regex.", flush=True)
+        _memory_llm_logged = True
+    return hit
 
 
 def harvest_memory(run: Any, agent_id: str = "", last_text: str = "") -> None:
-    """Tras una respuesta: heurística; LLM solo si OTTERCODE_MEMORY_LLM=1."""
+    """Tras una respuesta: heurística; LLM extra solo con modelo pequeño."""
     user_bit = str(getattr(run, "task_text", "") or "")[:800]
     asst = (last_text or "")[:1200]
     blob = f"{user_bit}\n{asst}"
     for m in _PREF_RX.finditer(blob):
         add_memory(m.group(0).strip(), agente_id=agent_id or None)
-    if os.environ.get("OTTERCODE_MEMORY_LLM", "0") != "1":
+    model = pick_memory_llm_model()
+    if not model:
         return
     if not user_bit.strip() and not asst.strip():
         return
     material = f"USUARIO: {user_bit}\nAGENTE: {asst}"
     num_ctx = getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT
-    model = getattr(run, "model", "") or ""
     try:
         if LLM_BACKEND == "openai":
             resp = requests.post(

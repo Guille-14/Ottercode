@@ -28,6 +28,13 @@
     ]
   },
   {
+    "id": "e09",
+    "prompt": "Dockerfile python slim",
+    "expect": [
+      "Dockerfile"
+    ]
+  },
+  {
     "id": "e05",
     "prompt": "página CSS grid de recetas",
     "expect": [
@@ -55,13 +62,6 @@
     "expect": [
       ".html",
       ".js"
-    ]
-  },
-  {
-    "id": "e09",
-    "prompt": "Dockerfile python slim",
-    "expect": [
-      "Dockerfile"
     ]
   },
   {

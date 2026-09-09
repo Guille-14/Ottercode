@@ -48,7 +48,6 @@ export interface Status {
   api: string
   num_ctx_default: number
   num_predict_default: number
-  compact_chars: number
 }
 
 export interface Skill {
