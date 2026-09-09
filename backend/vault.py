@@ -1,12 +1,55 @@
 # OtterCode — cerebro Obsidian: vault, notas de misión, recall y memoria
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from events import SseEvent, sse, Route
+
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+import json
+import os
+import re
+from pathlib import Path
+import requests
+from fastapi import HTTPException
+from pydantic import BaseModel, Field
+from backend.config import (
+    OLLAMA_BASE_URL, LLM_BACKEND, NUM_CTX_DEFAULT
+)
 from backend.runstate import OtterRun  # noqa: E402
 from backend.ollama import _ollama_ndjson_text  # noqa: E402
 from backend.config import LLM_BACKEND, NUM_CTX_DEFAULT, OLLAMA_BASE_URL  # noqa: E402
 from backend.agents import _chat_base  # noqa: E402
-from backend.ollama import *  # noqa: F401,F403
-from backend.runstate import *  # noqa: F401,F403
+from backend.ollama import (
+    _ollama_ndjson_text
+)
+from backend.runstate import (
+    OtterRun
+)
 from fastapi import APIRouter  # noqa
 router = APIRouter(tags=["vault"])
 
@@ -267,7 +310,7 @@ def _extract_user_insights(run: Any, model: str = "") -> str:
         else:
             resp = requests.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
-                json={"model": run.model, "prompt": material,
+                json={"model": model, "prompt": material,
                       "system": _USER_INSIGHT_SYSTEM, "stream": False,
                       "options": {"num_ctx": int(num_ctx), "num_predict": 256, "num_gpu": 99}},
                 timeout=(10, 90))

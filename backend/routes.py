@@ -1,12 +1,49 @@
 # OtterCode — capa HTTP REST: todos los endpoints /api (vía APIRouter)
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from events import SseEvent, sse, Route
+
+from backend.config import (
+    OLLAMA_BASE_URL, DEFAULT_MODEL, LLM_BACKEND, WORKSPACE_ROOT, _ollama_httpx,
+    MAX_REVIEW_ROUNDS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, APP_VERSION, DB_PATH, SOUL_PATH,
+    USER_PATH, _save_identity, VRAM_TOTAL_BYTES, _SOUL_CONTENT, _USER_CONTENT
+)
 from backend.vault import _memory_recall  # noqa: E402
 from backend.memory import get_memory, add_memory, delete_memory_item # noqa: E402
 from backend.runtime import ACTIVE_RUN, ACTIVITY, ACTIVITY_LOCK, RUN_LOCK, _activity_finish  # noqa: E402
 from backend.runstate import OtterRun  # noqa: E402
 from backend.prompts import extract_json_object  # noqa: E402
-from backend.profiles import _delete_profile, _get_profile, _load_active_profile, _load_profiles, _save_active_profile, _save_profile  # noqa: E402
+from backend.profiles import (
+    ProfileRequest, ActiveProfileRequest,
+    _delete_profile, _get_profile, _load_active_profile, _load_profiles,
+    _save_active_profile, _save_profile,
+)  # noqa: E402
+from backend.runstate import AbortRequested
 from backend.ollama import _LlmSession, fetch_models, flush_all_vram, flush_vram, invalidate_models_cache, stream_llm  # noqa: E402
 from backend.ctx_bench import load_ctx_bench, stream_benchmark  # noqa: E402
 from backend.history import HISTORY, _append_session_event  # noqa: E402
@@ -14,15 +51,30 @@ from backend.engine import run_task_stream  # noqa: E402
 from backend.db import get_session_detail, search_history  # noqa: E402
 from backend.config import APP_VERSION, DB_PATH, DEFAULT_MODEL, LLM_BACKEND, MAX_REVIEW_ROUNDS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, SOUL_PATH, USER_PATH, VRAM_TOTAL_BYTES, WORKSPACE_ROOT, _ollama_httpx, _save_identity  # noqa: E402
 from backend.agents import AGENT_FACTORY_SYSTEM, AGENT_ORDER, CORE_AGENTS, DYNAMIC_AGENTS, _load_skills_cfg, build_profile_prompt, get_agent, normalize_agent_profile, set_skill_enabled  # noqa: E402
-from backend.engine import *  # noqa: F401,F403
-from backend.agents import *  # noqa: F401,F403
+from backend.engine import (
+    run_task_stream, compact_run_now, PENDING_PERMISSIONS, PERMISSION_RESPONSES
+)
+from backend.agents import (
+    CORE_AGENTS, DYNAMIC_AGENTS, AGENT_ORDER, get_agent, set_skill_enabled,
+    normalize_agent_profile, build_profile_prompt, AGENT_FACTORY_SYSTEM, _load_skills_cfg
+)
 from backend.agents import _load_skills_cfg  # noqa
-from backend.ollama import *  # noqa: F401,F403
-from backend.runtime import *  # noqa: F401,F403
+from backend.ollama import (
+    flush_vram, flush_all_vram, fetch_models, invalidate_models_cache, resolve_coder_model,
+    stream_llm, _LlmSession
+)
+from backend.runtime import (
+    RUN_LOCK, ACTIVE_RUN, ACTIVITY_LOCK, ACTIVITY, _force_stop_run, _activity_set,
+    _activity_finish
+)
 from backend.runtime import _force_stop_run, _activity_set, _activity_finish  # noqa
-from backend.db import *  # noqa: F401,F403
+from backend.db import (
+    search_history, get_session_detail
+)
 from backend.history import HISTORY  # noqa
-from backend.vault import *  # noqa: F401,F403
+from backend.vault import (
+    router, _memory_recall
+)
 from fastapi import APIRouter  # noqa
 router = APIRouter(tags=["api"])
 

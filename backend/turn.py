@@ -352,6 +352,8 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
                                       "tool": event["name"], "args": event["args"], "title": f"🛠️ {event['name']}"})
                         elif event["kind"] == "result":
                             yield sse(SseEvent.tool_result, {"tool": event["name"], "ok": event["ok"], "output": event["output"]})
+                            if event.get("ok") and event["name"] in ("write_file", "edit_file", "apply_patch") and "```diff" in str(event.get("output") or ""):
+                                yield sse(SseEvent.diff, {"path": "", "diff": event["output"], "tool": event["name"]})
                             run.messages.append({
                                 "role": "tool",
                                 "tool_call_id": call.get("id"),
@@ -587,11 +589,14 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         if result.get("ok") and tool_name == "todo_write":
             run._todo_idle = 0
             yield sse(SseEvent.system, {"text": "📋 Todo actualizado (persistido en disco)."})
-        if result.get("ok") and tool_name in ("write_file", "append_file", "edit_file"):
-            fp = str(args.get("filepath") or args.get("path") or "")
-            out = str(result.get("output") or "")
-            if fp and "```diff" not in out:
-                result["output"] = out + f"\n```diff\n*** {fp}\n+ escrito/modificado\n```"
+        if result.get("ok") and tool_name in ("write_file", "edit_file", "apply_patch"):
+            _out = str(result.get("output") or "")
+            if "```diff" in _out:
+                yield sse(SseEvent.diff, {
+                    "path": str(args.get("filepath") or args.get("path") or ""),
+                    "diff": _out,
+                    "tool": tool_name,
+                })
         if result.get("ok") and tool_name in ("write_file", "append_file", "edit_file"):
             try:
                 from backend.hooks import post_code_generated, remember_file_hook

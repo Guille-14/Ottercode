@@ -1,0 +1,85 @@
+Metadata-Version: 2.4
+Name: ottercode
+Version: 3.0.0
+Summary: Orquestador local de agentes autónomos con Ollama y MCP
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.110.0
+Requires-Dist: uvicorn[standard]>=0.28.0
+Requires-Dist: websockets>=12.0
+Requires-Dist: pydantic>=2.6.0
+Requires-Dist: requests>=2.31.0
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: sqlite-vec>=0.1.0
+Requires-Dist: mcp>=1.0.0
+Requires-Dist: python-dotenv>=1.0.0
+
+# OtterCode Neo
+
+Agente de código **local** con Ollama: lee el repo, parchea, corre tests. FastAPI + React. Un coder por defecto (modo chat); la cadena de agentes es opcional.
+
+## Quickstart
+
+```bash
+bash install.sh
+# o a mano:
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+npm install
+npm run build
+```
+
+Ollama en `127.0.0.1:11434`. Arranque:
+
+```bash
+.venv/bin/python -m uvicorn backend:app --host 127.0.0.1 --port 8000
+```
+
+Abre `http://127.0.0.1:8000`.
+
+## Variables de entorno (backend)
+
+| Variable | Default | Significado |
+| --- | --- | --- |
+| `OTTERCODE_LLM_BACKEND` | `ollama` | Transporte: `ollama` o `openai` |
+| `OTTERCODE_OLLAMA` | `http://127.0.0.1:11434` | Daemon Ollama |
+| `OTTERCODE_HOST` | `127.0.0.1` | Bind HTTP |
+| `OTTERCODE_PORT` | `8000` | Puerto HTTP |
+| `OTTERCODE_MODEL` | `qwen2.5-coder:7b` | Coder por defecto (si no está, primer modelo de `/api/tags`) |
+| `OTTERCODE_API` | deprecado | Si vale `ollama`/`openai`, fallback de `OTTERCODE_LLM_BACKEND`. Si parece URL, se ignora. |
+| `OTTERCODE_NUM_CTX` | `16384` | Contexto (8 GB) |
+| `OTTERCODE_NUM_PREDICT` | `4096` | Tope de generación |
+| `OTTERCODE_KEEP_ALIVE` | `15m` | KV del coder en VRAM |
+| `OTTERCODE_ASK_PERMISSIONS` | `1` | Confirmar tools peligrosas |
+| `OTTERCODE_SANDBOX_REQUIRED` | `1` | Fail-closed sin bwrap. Selftest/CI: `=0` |
+| `OTTERCODE_NATIVE_TOOLS` | `auto` | `on` / `off` / `auto` |
+| `OTTERCODE_MAX_TOOL_STEPS` | `60` | Skills por turno |
+| `OTTERCODE_FLUSH_EVERY_TURN` | `0` | Flush solo al cambiar de modelo |
+| `OTTERCODE_TOKEN` | — | Auth `X-Otter-Token` |
+
+## Variables de entorno de Ollama (daemon, no el backend)
+
+Exportarlas **en el proceso de `ollama serve`** y reiniciar Ollama.
+
+| Variable | Valor | Efecto |
+| --- | --- | --- |
+| `OLLAMA_FLASH_ATTENTION` | `1` | Menos VRAM |
+| `OLLAMA_KV_CACHE_TYPE` | `q8_0` | KV cuantizado |
+| `OLLAMA_MAX_LOADED_MODELS` | `1` | Un modelo (8 GB) |
+| `OLLAMA_NUM_PARALLEL` | `1` | Sin lotes concurrentes |
+
+```bash
+export OLLAMA_FLASH_ATTENTION=1
+export OLLAMA_KV_CACHE_TYPE=q8_0
+export OLLAMA_MAX_LOADED_MODELS=1
+export OLLAMA_NUM_PARALLEL=1
+ollama serve
+```
+
+## Testing
+
+```bash
+OTTERCODE_ASK_PERMISSIONS=0 OTTERCODE_SANDBOX_REQUIRED=0 python dev/selftest.py
+npm run lint
+npm run build
+```

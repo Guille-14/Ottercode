@@ -1,10 +1,9 @@
 # OtterCode — estado vivo: RUN_LOCK, ACTIVE_RUN, ACTIVITY y bootstrap de arranque
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import threading
+import time
+from typing import Any, Dict
 from backend.runstate import OtterRun  # noqa: E402
-from backend.db import *  # noqa: F401,F403
-from backend.history import *  # noqa: F401,F403
-from backend.profiles import *  # noqa: F401,F403
 
 
 RUN_LOCK = threading.Lock()          # relevo secuencial: UNA misión a la vez

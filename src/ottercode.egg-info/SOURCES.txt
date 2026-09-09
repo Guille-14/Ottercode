@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+src/ottercode.egg-info/PKG-INFO
+src/ottercode.egg-info/SOURCES.txt
+src/ottercode.egg-info/dependency_links.txt
+src/ottercode.egg-info/requires.txt
+src/ottercode.egg-info/top_level.txt

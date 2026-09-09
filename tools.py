@@ -489,7 +489,8 @@ class ToolExecutor:
             raise ToolError("El campo 'content' no puede ser null.")
         path.parent.mkdir(parents=True, exist_ok=True)
         old = ""
-        if path.exists() and path.is_file():
+        existed = path.exists() and path.is_file()
+        if existed:
             try:
                 old = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -497,14 +498,16 @@ class ToolExecutor:
         new = str(content)
         path.write_text(new, encoding="utf-8")
         rel = path.relative_to(self.workdir)
+        if not existed or not old:
+            return f"OK: {len(new)} caracteres escritos en {rel}"
         diff_lines = list(difflib.unified_diff(
             old.splitlines(), new.splitlines(),
             fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm="", n=2,
         ))
         if not diff_lines:
             return f"OK: {len(new)} caracteres escritos en {rel} (sin cambios)"
-        body = "\n".join(diff_lines[:80])
-        if len(diff_lines) > 80:
+        body = "\n".join(diff_lines[:200])
+        if len(diff_lines) > 200:
             body += "\n[…diff truncado…]"
         return f"OK: {len(new)} caracteres escritos en {rel}\n\n```diff\n{body}\n```"
 

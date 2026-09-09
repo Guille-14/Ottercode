@@ -7,7 +7,7 @@ function Row({ children, tone }: { children: ReactNode; tone: 'add' | 'del' | 'h
     tone === 'add'
       ? 'bg-accent/10 text-accent'
       : tone === 'del'
-        ? 'bg-panel2 text-muted'
+        ? 'bg-danger/15 text-danger'
         : tone === 'hunk'
           ? 'bg-panel text-muted'
           : 'text-ink/80'

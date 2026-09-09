@@ -1,16 +1,31 @@
 # OtterCode — fábrica de la aplicación FastAPI (estáticos, PWA, tokens)
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import hmac
+import os
+from typing import Any
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from events import Route
+from backend.config import (
+    MOBILE_DIR, APP_VERSION, warn_ollama_speed_env, STATIC_DIR, _load_identity
+)
 from backend.profiles import _load_active_profile  # noqa: E402
 from backend.history import cleanup_empty_tasks, load_history  # noqa: E402
 from backend.db import _migrate_json_to_db, init_db  # noqa: E402
 from backend.config import APP_VERSION, MOBILE_DIR, STATIC_DIR, _load_identity, warn_ollama_speed_env  # noqa: E402
 from backend.config import _load_identity  # noqa
-from backend.db import *  # noqa: F401,F403
-from backend.history import *  # noqa: F401,F403
-from backend.profiles import *  # noqa: F401,F403
+from backend.db import (
+    init_db, _migrate_json_to_db
+)
+from backend.history import (
+    load_history, cleanup_empty_tasks
+)
+from backend.profiles import (
+    _ensure_default_profiles, _load_active_profile
+)
 from backend.profiles import _ensure_default_profiles, _load_active_profile  # noqa
-from backend.runtime import *  # noqa: F401,F403
 from backend.routes import router as api_router  # noqa
 from backend.vault import router as vault_router  # noqa
 

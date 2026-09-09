@@ -96,7 +96,7 @@ _PREF_RX = re.compile(
     r"(?i)\b(prefiero|me gusta|usa |no uses |siempre |nunca |quiero |a menos que )\b.{0,120}"
 )
 
-_SMALL_RX = re.compile(r"(?i)(^|[:/])?(1b|1\.5b|1\.7b|2b|3b)([:\-]|$)")
+_SMALL_RX = re.compile(r"(?i)(?:^|[:/\-_])(1b|1\.5b|1\.7b|2b|3b|3\.8b)(?:[:\-_]|$)")
 _memory_llm_logged = False
 
 
@@ -116,7 +116,7 @@ def pick_memory_llm_model() -> str:
             hit = str(n)
             break
     if not hit and not _memory_llm_logged:
-        print("[ottercode] memoria LLM desactivada: no hay modelo 1b/1.5b/3b en Ollama; fallback regex.", flush=True)
+        print("MEMORY_LLM desactivado: no hay modelo pequeño disponible", flush=True)
         _memory_llm_logged = True
     return hit
 

@@ -70,6 +70,12 @@ function buildSeg(
         last.output = String(ev.data.output ?? '')
         last.ok = Boolean(ev.data.ok)
       }
+    } else if (ev.name === 'diff') {
+      const d = String(ev.data.diff ?? '')
+      if (d && seg.tools.length > 0) {
+        const last = seg.tools[seg.tools.length - 1]
+        if (!last.output || !last.output.includes('```diff')) last.output = d
+      }
     }
   }
   return seg

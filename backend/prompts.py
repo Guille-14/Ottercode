@@ -1,10 +1,42 @@
 # OtterCode — constructores de prompts, extracción de JSON y herramientas
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from events import SseEvent, sse, Route
+
+from backend.config import (
+    WORKSPACE_ROOT, REVIEWER_PER_FILE_LIMIT, REVIEWER_TOTAL_LIMIT, TOOL_RESULT_CONTEXT_LIMIT
+)
 from backend.runstate import OtterRun  # noqa: E402
 from backend.config import REVIEWER_PER_FILE_LIMIT, REVIEWER_TOTAL_LIMIT, TOOL_RESULT_CONTEXT_LIMIT, WORKSPACE_ROOT  # noqa: E402
 from backend.agents import Agent, DYNAMIC_AGENTS, _goal_block, get_agent  # noqa: E402
-from backend.agents import *  # noqa: F401,F403
+from backend.agents import (
+    Agent, DYNAMIC_AGENTS, get_agent, _goal_block
+)
 
 
 # Extracción de JSON (skills y perfiles de la Fábrica)
