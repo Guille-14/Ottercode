@@ -177,7 +177,10 @@ FLUSH_EVERY_TURN = os.environ.get("OTTERCODE_FLUSH_EVERY_TURN", "0").strip().low
 
 _NATIVE_AUTO_MARKERS = (
     "qwen2.5-coder", "qwen3-coder", "qwen2.5", "qwen3",
-    "llama3.1", "llama3.3", "mistral", "devstral",
+    "llama3.1", "llama3.2", "llama3.3", "mistral", "mixtral",
+    "mistral-nemo", "mistral-small", "devstral",
+    "command-r", "command-r-plus", "granite3", "firefunction",
+    "nemotron", "hermes3", "qwq",
 )
 
 

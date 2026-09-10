@@ -62,6 +62,22 @@ def test_native_auto_uses_capabilities_then_markers():
             os.environ["OTTERCODE_NATIVE_TOOLS"] = prev
 
 
+def test_native_on_off_ignore_capabilities():
+    import os
+    from backend import config as cfg
+    prev = os.environ.get("OTTERCODE_NATIVE_TOOLS")
+    try:
+        os.environ["OTTERCODE_NATIVE_TOOLS"] = "on"
+        assert cfg.native_tools_enabled("anything-without-tools") is True
+        os.environ["OTTERCODE_NATIVE_TOOLS"] = "off"
+        assert cfg.native_tools_enabled("qwen2.5-coder:7b") is False
+    finally:
+        if prev is None:
+            os.environ.pop("OTTERCODE_NATIVE_TOOLS", None)
+        else:
+            os.environ["OTTERCODE_NATIVE_TOOLS"] = prev
+
+
 def test_timeout_local_readable():
     from backend import ollama as ol
     to = ol.generate_timeout_for("http://127.0.0.1:11434/api/chat")
