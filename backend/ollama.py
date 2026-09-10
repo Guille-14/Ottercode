@@ -386,6 +386,16 @@ def _host_is_local(url: str) -> bool:
     return False
 
 
+def _keep_partial(run: Any, collected: List[str]) -> None:
+    """Conserva tokens ya emitidos si el stream muere a mitad."""
+    if not collected:
+        return
+    try:
+        run._partial_text = "".join(collected)
+    except AttributeError:
+        pass
+
+
 def generate_timeout_for(url: str = "") -> Tuple[int, int]:
     """Timeout efectivo de la petición LLM (leíble en LAST_GENERATE_TIMEOUT)."""
     global LAST_GENERATE_TIMEOUT
@@ -486,6 +496,7 @@ def stream_llm(
                         except json.JSONDecodeError:
                             continue
                         if chunk.get("error"):
+                            _keep_partial(run, collected)
                             raise RuntimeError(
                                 _with_model_hint(f"Modelo: {chunk['error']}", run.model))
                         choices = chunk.get("choices") or [{}]
@@ -508,6 +519,7 @@ def stream_llm(
                             stats["_truncated_tool"] = trunc
                             stats["_truncated_err"] = err[:400]
                             break
+                        _keep_partial(run, collected)
                         raise RuntimeError(_with_model_hint(f"Ollama: {err}", run.model))
                     if data.get("done"):
                         stats = {
@@ -549,6 +561,7 @@ def stream_llm(
                 except AttributeError:
                     pass
                 raise AbortRequested()
+            _keep_partial(run, collected)
             raise RuntimeError(_friendly_ollama_error(exc))
         except (requests.ConnectionError, requests.ConnectTimeout,
                 requests.ReadTimeout) as exc:
@@ -561,6 +574,7 @@ def stream_llm(
                 raise AbortRequested()
             max_tries = int(os.environ.get("OTTERCODE_OLLAMA_RETRIES", "3"))
             if emitted or attempt >= max_tries:
+                _keep_partial(run, collected)
                 raise RuntimeError(_friendly_ollama_error(exc))
             wait = min(32, 2 ** attempt)
             print(f"[ottercode] Ollama retry {attempt}/{max_tries} wait={wait}s: {exc}",

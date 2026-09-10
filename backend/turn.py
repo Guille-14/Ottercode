@@ -366,9 +366,38 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
         except RuntimeError as _rte:
             from backend.ollama import _truncated_tool_name
             _tn = _truncated_tool_name(str(_rte))
-            if not _tn:
-                raise
-            last_text, _stats = "", {"_truncated_tool": _tn, "_truncated_err": str(_rte)[:400]}
+            if _tn:
+                last_text, _stats = "", {"_truncated_tool": _tn, "_truncated_err": str(_rte)[:400]}
+            else:
+                parcial = getattr(run, "_partial_text", "") or ""
+                if not parcial:
+                    raise
+                from backend.rescue import _should_rescue, _rescue_code_from_text
+                tools_used = getattr(run, "_turn_tools", set()) or set()
+                if not _should_rescue(parcial, tools_used):
+                    raise
+                rescued = yield from _rescue_code_from_text(run, agent_id, parcial)
+                if not rescued:
+                    raise
+                yield sse(SseEvent.system, {
+                    "text": "⚠️ Corte de conexión a mitad de generación: se salvó el trabajo hasta el corte.",
+                })
+                last_text, _stats = parcial, {}
+                if getattr(run, "_rescue_truncated", False):
+                    run._last_salvaged_file = rescued
+                    run._turn_salvaged_truncated = True
+                    try:
+                        _tail = (run.workdir / rescued).read_text(encoding="utf-8")[-900:]
+                    except OSError:
+                        _tail = ""
+                    run.messages.append({"role": "user", "content": (
+                        f"OK: {rescued} está en disco PERO incompleto (corte de conexión). "
+                        "PROHIBIDO write_file (machaca lo escrito). "
+                        f"Siguiente skill: append_file filepath=\"{rescued}\" "
+                        "con SOLO lo que falta (≤150 líneas). Cola actual:\n"
+                        f"{_tail}"
+                    )})
+                    continue
         # v3.4 · el parsing y el historial usan el texto SIN bloques <think>
         parse_text = _strip_think(last_text)
         trunc_tool = str((_stats or {}).get("_truncated_tool") or "")
