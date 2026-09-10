@@ -217,7 +217,8 @@ export const useUi = create<UiState>()(
         set({ streaming: false })
       },
       startMission: async (payload) => {
-        get().stopMission(false)
+        const wasStreaming = get().streaming
+        get().stopMission(wasStreaming)
         controller = new AbortController()
         const missionAbort = controller
         const contTask =

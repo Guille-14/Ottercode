@@ -400,6 +400,7 @@ class CtxApplyRequest(BaseModel):
 def api_ctx_bench(req: CtxBenchRequest) -> StreamingResponse:
     """B1 · Recalibrar num_ctx (SSE, GPU exclusiva)."""
     model = (req.model or "").strip() or DEFAULT_MODEL
+    RUN_LOCK.steal_if_stale()
     if not RUN_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Hay una misión en curso: aborta o espera para calibrar.")
 
@@ -820,6 +821,7 @@ def api_agents_create(req: AgentCreateRequest) -> StreamingResponse:
     también es un turno) → token… → agent_created (perfil completo, listo
     para ser inyectado en la cadena por el Arquitecto).
     """
+    RUN_LOCK.steal_if_stale()
     if not RUN_LOCK.acquire(blocking=False):
         raise HTTPException(
             status_code=409,
@@ -971,6 +973,7 @@ def api_task(req: TaskRequest) -> StreamingResponse:
                 status_code=404,
                 detail=f"No existe la conversación '{req.continue_task}' para continuar.",
             )
+    RUN_LOCK.steal_if_stale()
     if not RUN_LOCK.acquire(blocking=False):
         # v3.3 · TOMAR EL RELEVO: con force=True se aborta la misión en curso
         # (cierre agresivo del socket incluido) y se espera a que el lock
@@ -980,14 +983,17 @@ def api_task(req: TaskRequest) -> StreamingResponse:
                 _force_stop_run(active)
             deadline = time.time() + 8.0
             while time.time() < deadline:
+                RUN_LOCK.steal_if_stale()
                 if RUN_LOCK.acquire(blocking=False):
                     break
                 time.sleep(0.15)
             else:
-                raise HTTPException(
-                    status_code=409,
-                    detail="La misión anterior no liberó el relevo a tiempo; reintenta en unos segundos.",
-                )
+                RUN_LOCK.steal_if_stale()
+                if not RUN_LOCK.acquire(blocking=False):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="La misión anterior no liberó el relevo a tiempo; reintenta en unos segundos.",
+                    )
         else:
             raise HTTPException(
                 status_code=409,
