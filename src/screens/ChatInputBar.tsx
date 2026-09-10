@@ -331,6 +331,7 @@ export default function ChatInputBar({
       onLaunch({
         ...fields,
         mode: effMode,
+        continue_task: st.taskId || undefined,
         goal: effGoal,
         plan_only: planOnly || Boolean(parsed.fields.plan_only),
         loop_mode: loopMode,

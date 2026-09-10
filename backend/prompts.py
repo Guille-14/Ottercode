@@ -282,6 +282,8 @@ def build_architect_prompt(task_text: str, roster: Optional[str] = None,
                            memory: str = "", goal: str = "") -> str:
     parts = [
         f"MISIÓN DEL EQUIPO (recibida del usuario):\n{task_text}",
+        "La misión es EXACTAMENTE lo que pidió el usuario. No la sustituyas "
+        "por un demo, una web de nutrias, ni un proyecto de marca OtterCode.",
         f"[AGENTES DINÁMICOS DISPONIBLES]\n{roster if roster is not None else build_dynamic_roster()}",
     ]
     goal_block = _goal_block(goal)
@@ -381,7 +383,8 @@ def build_developer_prompt(
         "# MISIÓN — BALSA OTTERCODE",
         "Eres el Programador de la balsa. Implementa la misión escribiendo los "
         "archivos con write_file (usa mkdir para estructura y tree/list_dir si "
-        "necesitas revisar el estado).",
+        "necesitas revisar el estado). El tema lo marca el usuario: si pidió "
+        "Hermes Agent, NO hagas una web de nutrias ni un demo de OtterCode.",
         f"[MISIÓN DEL USUARIO]\n{task_text}",
     ]
     if goal:

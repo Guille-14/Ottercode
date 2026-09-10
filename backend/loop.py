@@ -146,6 +146,12 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
                 run._files_ever_written = True
         except Exception:
             pass
+        # Follow-up en cadena: NO reiniciar Arquitecto→…; el usuario comenta
+        # el trabajo ya hecho. Un turno de chat sobre el workspace existente.
+        if run.mode == "chain" and getattr(run, "_files_ever_written", False):
+            run.mode = "chat"
+            if run.start_agent in ("architect", "researcher"):
+                run.start_agent = "developer"
     # v4.1 · ▶ ejecución de un plan ya aprobado (resume_plan)
     resumed = bool(getattr(run, "resume_plan", None))
     yield sse(SseEvent.task_start, {
