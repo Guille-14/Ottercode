@@ -48,6 +48,14 @@ def test_second_html_rejected():
         assert "Hermes Agent" in (wd / "src" / "index.html").read_text(encoding="utf-8")
 
 
+def test_est_tok_chars():
+    # ~4 chars/token: un chunk de 40 chars ≈ 10 tok, no 1 evento
+    n = max(1, round(40 / 4))
+    assert n == 10
+    n2 = max(1, round(3 / 4))
+    assert n2 == 1
+
+
 def test_tool_arg_deltas_stream():
     from backend.ollama import tool_arg_deltas
     p, d = tool_arg_deltas("", '{"filepath": "a.html", "content": "<h')

@@ -89,17 +89,38 @@ interface UiState {
 let seq = 0
 let controller: AbortController | null = null
 
-// Ventana deslizante para el cálculo de tokens/segundo en tiempo real (fuentas
-// de tiempo de cada token emitido por el modelo). No se persiste.
-let tokTimes: number[] = []
+// Ventana deslizante: cada marca es {t, n} con n = tokens estimados del chunk
+// (chars/4), no “1 por frame SSE”. Un frame de Ollama suele ser varias palabras.
+let tokMarks: { t: number; n: number }[] = []
 const RATE_WINDOW_MS = 3000
+let turnEst = 0
 
-// Marca el tiempo de llegada de un token (barato). El total/tps reales se
-// calculan al COMMITTEAR el lote, no por token (ver startMission).
-function pushTokenTime(): void {
+function estTok(s: string): number {
+  const len = (s || '').length
+  if (!len) return 0
+  return Math.max(1, Math.round(len / 4))
+}
+
+function noteTokens(n: number): void {
+  if (n <= 0) return
   const now = Date.now()
-  tokTimes.push(now)
-  while (tokTimes.length && now - tokTimes[0] > RATE_WINDOW_MS) tokTimes.shift()
+  tokMarks.push({ t: now, n })
+  while (tokMarks.length && now - tokMarks[0].t > RATE_WINDOW_MS) tokMarks.shift()
+  turnEst += n
+}
+
+function currentTps(): number {
+  const now = Date.now()
+  while (tokMarks.length && now - tokMarks[0].t > RATE_WINDOW_MS) tokMarks.shift()
+  if (!tokMarks.length) return 0
+  const n = tokMarks.reduce((s, x) => s + x.n, 0)
+  const span = Math.max(now - tokMarks[0].t, 200)
+  return n / (span / 1000)
+}
+
+function resetTokWindow(): void {
+  tokMarks = []
+  turnEst = 0
 }
 
 export const useUi = create<UiState>()(
@@ -147,7 +168,7 @@ export const useUi = create<UiState>()(
         else set({ view: v })
       },
       clearMission: () => {
-        tokTimes = []
+        resetTokWindow()
         set({
           mission: [],
           taskId: null,
@@ -235,6 +256,7 @@ export const useUi = create<UiState>()(
         }
         // Instantáneo: no esperamos historyDetail (eso congelaba la UI).
         // Conservamos burbujas y añadimos el mensaje del usuario ya.
+        resetTokWindow()
         if (keepOngoing) {
           set({
             taskId: contTask,
@@ -242,6 +264,7 @@ export const useUi = create<UiState>()(
             streaming: true,
             missionError: null,
             missionStartedAt: Date.now(),
+            tokensPerSec: 0,
           })
         } else {
           set({
@@ -322,11 +345,25 @@ export const useUi = create<UiState>()(
               const v = Number(ev.data.version || Date.now())
               if (p) set({ fileTick: { path: p, version: v } })
             }
-            if (ev.name === 'token') {
-              pushTokenTime()
-              tokAcc++
+            if (ev.name === 'token' && typeof ev.data.token === 'string') {
+              const n = estTok(String(ev.data.token))
+              noteTokens(n)
+              tokAcc += n
+            }
+            if (ev.name === 'agent_end') {
+              const official = Number(ev.data.tokens)
+              if (Number.isFinite(official) && official > 0) {
+                const delta = official - turnEst
+                tokAcc += delta
+                turnEst = official
+              }
+              const secs = Number(ev.data.seconds)
+              if (Number.isFinite(official) && official > 0 && Number.isFinite(secs) && secs > 0.05) {
+                set({ tokensPerSec: official / secs })
+              }
             }
             if (ev.name === 'agent_start') {
+              turnEst = 0
               set({
                 liveAgent: String(ev.data.nombre ?? ev.data.agent ?? ''),
                 liveModel: String(ev.data.model ?? get().model),
@@ -359,8 +396,8 @@ export const useUi = create<UiState>()(
           tokAcc = 0
           set((s) => ({
             mission: [...s.mission, ...evs.map((e) => ({ ...e, id: ++seq, at: Date.now() }))],
-            totalTokens: s.totalTokens + n,
-            tokensPerSec: Math.round((tokTimes.length / RATE_WINDOW_MS) * 1000),
+            totalTokens: Math.max(0, s.totalTokens + n),
+            tokensPerSec: currentTps() || s.tokensPerSec,
           }))
         }
         let rafId = 0

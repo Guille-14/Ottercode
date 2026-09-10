@@ -128,7 +128,11 @@ def run_simple_agent(
         _maybe_compact_messages(run, agent_id, system_prompt, prompt=prompt, force=True)
         text, _stats = yield from stream_llm(run, agent_id, system_prompt, prompt)  # type: ignore[misc]
     run.transcript.append({"kind": "agent", "agent": agent_id, "iteration": iteration, "text": text})
-    yield sse(SseEvent.agent_end, {"agent": agent_id, "iteration": iteration})
+    yield sse(SseEvent.agent_end, {
+        "agent": agent_id, "iteration": iteration,
+        "tokens": (_stats or {}).get("tokens") if isinstance(_stats, dict) else None,
+        "seconds": (_stats or {}).get("seconds") if isinstance(_stats, dict) else None,
+    })
     try:
         harvest_memory(run, agent_id, text)
     except Exception:

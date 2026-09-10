@@ -292,6 +292,7 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
     run.messages.append({"role": "user", "content": prompt})
     steps = 0
     last_text = ""
+    _stats: Dict[str, Any] = {}
     while steps < max_steps:
         if run.aborted:
             raise AbortRequested()
@@ -808,7 +809,12 @@ def run_agent_turn(run: OtterRun, agent_id: str, iteration: int, prompt: str,
             "text": f"⚠️ Límite de skills por turno alcanzado ({max_steps}); el turno termina."
         })
 
-    yield sse(SseEvent.agent_end, {"agent": agent_id, "iteration": iteration, "steps": steps})
+    _tok = (_stats or {}).get("tokens") if isinstance(_stats, dict) else None
+    _sec = (_stats or {}).get("seconds") if isinstance(_stats, dict) else None
+    yield sse(SseEvent.agent_end, {
+        "agent": agent_id, "iteration": iteration, "steps": steps,
+        "tokens": _tok, "seconds": _sec,
+    })
     cleaned = _strip_think(last_text)
     try:
         harvest_memory(run, agent_id, cleaned)
