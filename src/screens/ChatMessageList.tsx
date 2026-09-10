@@ -18,6 +18,7 @@ interface ToolSeg {
   name: string
   title: string
   output?: string
+  draft?: string
   ok?: boolean
 }
 
@@ -58,7 +59,22 @@ function buildSeg(
   for (let i = start; i <= end; i++) {
     const ev = mission[i]
     if (ev.name === 'token' && typeof ev.data.token === 'string') {
-      seg.buf += ev.data.token
+      const toolName = typeof ev.data.tool === 'string' ? ev.data.tool : ''
+      if (toolName && seg.tools.length > 0) {
+        const last = seg.tools[seg.tools.length - 1]
+        last.draft = (last.draft || '') + ev.data.token
+      } else {
+        seg.buf += ev.data.token
+      }
+    } else if (ev.name === 'tool_draft') {
+      const name = String(ev.data.tool ?? 'write_file')
+      const chunk = String(ev.data.token ?? ev.data.content ?? '')
+      if (seg.tools.length === 0 || seg.tools[seg.tools.length - 1].name !== name) {
+        seg.tools.push({ id: `draft:${i}`, name, title: name, draft: chunk })
+      } else {
+        const last = seg.tools[seg.tools.length - 1]
+        last.draft = (last.draft || '') + chunk
+      }
     } else if (ev.name === 'tool_call') {
       const id = String(ev.data.id ?? ev.id)
       const name = String(ev.data.tool ?? ev.data.name ?? 'tool')
@@ -175,6 +191,8 @@ function MdPre({ children }: { children?: ReactNode }) {
     </div>
   )
 }
+
+function splitThinking(buf: string): { thought: string; text: string } {
   // Captura bloques <think>...</think>
   const thinkMatch = buf.match(/<think>([\s\S]*?)<\/think>/i)
   if (thinkMatch) {
@@ -397,6 +415,13 @@ const SegBubble = memo(function SegBubble({
                           <p className="pane-code mt-1 truncate oc-mono text-[11px] text-muted">
                             {F.collapseBigFences(t.output)?.collapsed ? 'Bloque largo de salida' : t.output}
                           </p>
+                        ) : t.draft ? (
+                          <pre className="mt-1.5 max-h-80 overflow-auto whitespace-pre-wrap oc-mono text-[11px] text-ink">
+                            {t.draft}
+                            {last && streaming ? <span className="oc-caret" /> : null}
+                          </pre>
+                        ) : last && streaming ? (
+                          <p className="mt-1 text-[11px] text-muted">escribiendo…</p>
                         ) : null}
                       </div>
                     ))}

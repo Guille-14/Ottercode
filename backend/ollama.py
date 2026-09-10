@@ -386,6 +386,17 @@ def _host_is_local(url: str) -> bool:
     return False
 
 
+def tool_arg_deltas(prev: str, args: str) -> Tuple[str, str]:
+    """Devuelve (nuevo_prev, delta) para streamear arguments de tool_calls."""
+    prev = prev or ""
+    args = args or ""
+    if args.startswith(prev) and len(args) > len(prev):
+        return args, args[len(prev):]
+    if args and args != prev:
+        return args, ""
+    return prev, ""
+
+
 def _keep_partial(run: Any, collected: List[str]) -> None:
     """Conserva tokens ya emitidos si el stream muere a mitad."""
     if not collected:
@@ -437,6 +448,7 @@ def stream_llm(
         stats: Dict[str, Any] = {}
         emitted = False
         _chat_tool_calls: List[Any] = []
+        _arg_seen: Dict[int, str] = {}
         try:
             with _ollama_session.post(
                 url, json=payload, stream=True, timeout=generate_timeout_for(url),
@@ -541,6 +553,31 @@ def stream_llm(
                     msg = data.get("message") or {}
                     if _is_chat and msg.get("tool_calls"):
                         _chat_tool_calls.extend(msg["tool_calls"])
+                        for i, tc in enumerate(msg["tool_calls"]):
+                            if not isinstance(tc, dict):
+                                continue
+                            fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                            name = str((fn or {}).get("name") or "tool")
+                            raw_args = (fn or {}).get("arguments")
+                            if isinstance(raw_args, dict):
+                                args = json.dumps(raw_args, ensure_ascii=False)
+                            else:
+                                args = str(raw_args or "")
+                            prev = _arg_seen.get(i, "")
+                            nxt, delta = tool_arg_deltas(prev, args)
+                            _arg_seen[i] = nxt
+                            if delta:
+                                if not prev:
+                                    yield sse(SseEvent.tool_call, {
+                                        "id": f"draft-{agent_id}-{i}",
+                                        "tool": name,
+                                        "title": name,
+                                    })
+                                yield sse(SseEvent.token, {
+                                    "agent": agent_id,
+                                    "token": redact_text(delta),
+                                    "tool": name,
+                                })
                         continue
                     token = msg.get("content", "") if _is_chat else data.get("response", "")
                     if token:

@@ -48,6 +48,16 @@ def test_second_html_rejected():
         assert "Hermes Agent" in (wd / "src" / "index.html").read_text(encoding="utf-8")
 
 
+def test_tool_arg_deltas_stream():
+    from backend.ollama import tool_arg_deltas
+    p, d = tool_arg_deltas("", '{"filepath": "a.html", "content": "<h')
+    assert d.startswith("{")
+    p2, d2 = tool_arg_deltas(p, p + "tml>\"}")
+    assert d2 == 'tml>"}'
+    p3, d3 = tool_arg_deltas(p2, p2)
+    assert d3 == ""
+
+
 def test_fresh_chain_untouched():
     class Run:
         mode = "chain"
