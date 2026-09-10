@@ -9,7 +9,7 @@ import { toolCallFilepath, normPath } from './sse'
 
 export interface SlashResult {
   fields: Record<string, unknown>
-  action?: '/reset' | '/save' | '/focus'
+  action?: '/reset' | '/save' | '/focus' | '/help' | '/project' | '/stop' | '/retry' | '/new' | '/undo' | '/compress'
 }
 
 export const SLASH_COMMANDS: { cmd: string; desc: string }[] = [
@@ -18,11 +18,25 @@ export const SLASH_COMMANDS: { cmd: string; desc: string }[] = [
   { cmd: '/agents', desc: 'Empezar por un agente: /agents architect|researcher|developer|reviewer' },
   { cmd: '/ultrareview', desc: 'Revisión rigurosa profunda del resultado' },
   { cmd: '/reset', desc: 'Limpiar la misión actual' },
+  { cmd: '/new', desc: 'Nueva sesión' },
+  { cmd: '/stop', desc: 'Abortar la generación en curso' },
+  { cmd: '/retry', desc: 'Reintentar el último turno' },
+  { cmd: '/undo', desc: 'Deshacer cambios git de la misión' },
+  { cmd: '/compress', desc: 'Compactar el contexto ahora' },
   { cmd: '/model', desc: 'Elegir modelo: /model <nombre>' },
   { cmd: '/sys', desc: 'Inyectar una regla de sistema temporal: /sys <regla>' },
   { cmd: '/save', desc: 'Exportar el transcurso a Markdown' },
   { cmd: '/focus', desc: 'Alternar modo foco (ocultar barra lateral)' },
   { cmd: '/yolo', desc: 'Ejecutar directo con developer, sin revisión previa' },
+  { cmd: '/help', desc: 'Lista los comandos slash' },
+  { cmd: '/project', desc: 'Carpeta de proyecto: /project <ruta>' },
+  { cmd: '/cron', desc: 'Cron: /cron list|pause|resume|run|remove <id>' },
+  { cmd: '/skills', desc: 'Skills: /skills list|enable|disable|delete <name>' },
+  { cmd: '/memory', desc: 'Memoria: /memory approve <id> | status' },
+  { cmd: '/sessions', desc: 'Sesiones: /sessions list | show <id>' },
+  { cmd: '/journey', desc: 'Grafo de aprendizaje' },
+  { cmd: '/learning', desc: 'Alias de /journey' },
+  { cmd: '/memory-graph', desc: 'Alias de /journey' },
 ]
 
 export function applySlash(line: string): SlashResult {
@@ -40,6 +54,16 @@ export function applySlash(line: string): SlashResult {
       return { fields: { task: arg || 'revisión a fondo', mode: 'chain', start_agent: 'reviewer' } }
     case '/reset':
       return { fields: {}, action: '/reset' }
+    case '/new':
+      return { fields: {}, action: '/new' }
+    case '/stop':
+      return { fields: {}, action: '/stop' }
+    case '/retry':
+      return { fields: {}, action: '/retry' }
+    case '/undo':
+      return { fields: {}, action: '/undo' }
+    case '/compress':
+      return { fields: {}, action: '/compress' }
     case '/model':
       return { fields: { model: arg } }
     case '/sys':
@@ -49,8 +73,33 @@ export function applySlash(line: string): SlashResult {
     case '/focus':
       return { fields: {}, action: '/focus' }
     case '/yolo':
-      return { fields: { task: arg, start_agent: 'developer', mode: 'chain' } }
+      return { fields: { task: arg || 'ejecutar', start_agent: 'developer', mode: 'chain', yolo: true } }
+    case '/help':
+      return { fields: {}, action: '/help' }
+    case '/project':
+      return { fields: { project_path: arg }, action: '/project' }
+    case '/cron':
+      return { fields: { cron: arg }, action: '/cron' }
+    case '/skills':
+      return { fields: { skills_cmd: arg }, action: '/skills' }
+    case '/memory':
+      return { fields: { memory_cmd: arg }, action: '/memory' }
+    case '/sessions':
+      return { fields: { sessions_cmd: arg }, action: '/sessions' }
+    case '/journey':
+    case '/learning':
+    case '/memory-graph':
+      return { fields: {}, action: '/journey' }
     default:
+      if (cmd.startsWith('/') && cmd.length > 1) {
+        const skill = cmd.slice(1)
+        return {
+          fields: {
+            task: arg || `Usar skill ${skill}`,
+            skill,
+          },
+        }
+      }
       return { fields: { task: cmd + (arg ? ` ${arg}` : '') } }
   }
 }
@@ -89,6 +138,8 @@ export function stripToolJson(buf: string): string {
     const close = s.indexOf('```', idx + 7)
     s = close !== -1 ? s.slice(0, idx) + s.slice(close + 3) : s.slice(0, idx)
   }
+  s = s.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+  s = s.replace(/<function=[^>]+>[\s\S]*?<\/function>/gi, '')
   return s
 }
 
@@ -161,6 +212,37 @@ export interface StudioTarget {
   path: string
 }
 
+export function filePathOf(f: unknown): string {
+  if (typeof f === 'string') return f.trim()
+  if (f && typeof f === 'object') {
+    const o = f as Record<string, unknown>
+    if (typeof o.path === 'string' && o.path.trim()) return o.path.trim()
+    if (typeof o.name === 'string' && o.name.trim()) return o.name.trim()
+  }
+  return ''
+}
+
+export function looksLikeHtmlDump(text: string): boolean {
+  const t = (text || '').trim()
+  if (t.length < 80) return false
+  const tags = (t.match(/<\/?[a-z][\w:-]*/gi) || []).length
+  return tags >= 6 && /<(div|h[1-6]|p|section|html|body)\b/i.test(t)
+}
+
+const HIDDEN_BASE = new Set([
+  '.otter_rag.db',
+  '.otter_rag.indexed',
+  '.otter_hooks.json',
+  '.otter_todo.json',
+  '.otter_memory.json',
+  'ottercode_transcript.json',
+])
+
+export function isHiddenWorkspaceFile(path: string): boolean {
+  const base = path.split('/').pop() || path
+  return HIDDEN_BASE.has(base) || base.startsWith('.otter')
+}
+
 export function studioFile(taskId: string, path: string): void {
   useUi.getState().openStudio({ taskId, path })
 }
@@ -184,8 +266,8 @@ export function deriveLiveFiles(mission: MissionEvent[]): string[] {
       const files = e.data['files']
       if (Array.isArray(files)) {
         for (const f of files) {
-          const s = String(f)
-          if (s && !seen.has(s)) {
+          const s = filePathOf(f)
+          if (s && !seen.has(s) && s !== '[object Object]' && !isHiddenWorkspaceFile(s)) {
             seen.add(s)
             out.push(normPath(s))
           }
@@ -228,5 +310,8 @@ export const F = {
   studioFile,
   hardenSrcdoc,
   deriveLiveFiles,
+  filePathOf,
+  looksLikeHtmlDump,
+  isHiddenWorkspaceFile,
   normPath,
 }

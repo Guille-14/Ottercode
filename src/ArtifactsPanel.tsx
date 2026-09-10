@@ -25,6 +25,11 @@ function flattenTree(nodes: unknown): FlatFile[] {
     for (const n of list) {
       if (!n || typeof n !== 'object') continue
       const node = n as { name?: unknown; type?: unknown; size?: unknown; children?: unknown }
+      const direct = typeof node.path === 'string' ? node.path : ''
+      if (direct && node.type !== 'dir') {
+        out.push({ path: direct, size: typeof node.size === 'number' ? node.size : undefined })
+        continue
+      }
       const name = typeof node.name === 'string' ? node.name : ''
       if (!name) continue
       const path = [...base, name].join('/')
@@ -48,16 +53,16 @@ function getFileIcon(path: string) {
   switch (ext) {
     case 'html':
     case 'htm':
-      return <Globe className="h-4 w-4 text-emerald-400" />
+      return <Globe className="h-4 w-4 text-accent" />
     case 'css':
-      return <Palette className="h-4 w-4 text-pink-400" />
+      return <Palette className="h-4 w-4 text-muted" />
     case 'js':
     case 'ts':
     case 'jsx':
     case 'tsx':
-      return <FileCode className="h-4 w-4 text-amber-400" />
+      return <FileCode className="h-4 w-4 text-ink2" />
     default:
-      return <FileText className="h-4 w-4 text-sky-400" />
+      return <FileText className="h-4 w-4 text-muted" />
   }
 }
 
@@ -88,6 +93,7 @@ export default function ArtifactsPanel() {
   const studio = useUi((s) => s.studio)
   
   const [files, setFiles] = useState<FlatFile[]>([])
+  const [hooks, setHooks] = useState<Record<string, { ok?: boolean; issues?: string[] }>>({})
   const [filesErr, setFilesErr] = useState('')
   const [selected, setSelected] = useState('')
   const [follow, setFollow] = useState(true)
@@ -98,7 +104,15 @@ export default function ArtifactsPanel() {
   const [copied, setCopied] = useState(false)
 
   const liveFiles = useMemo(() => F.deriveLiveFiles(mission), [mission])
-  const done = mission.some((e) => isDoneName(e.name))
+  const done = useMemo(() => {
+    if (streaming) return false
+    for (let i = mission.length - 1; i >= 0; i--) {
+      const n = mission[i].name
+      if (isDoneName(n)) return true
+      if (n === 'agent_start' || n === 'task_start') return false
+    }
+    return false
+  }, [mission, streaming])
 
   const refresh = useCallback(() => {
     if (!taskId) return
@@ -106,8 +120,12 @@ export default function ArtifactsPanel() {
       .workspace(taskId)
       .then((r) => {
         const list: FlatFile[] = flattenTree(r.tree).filter(
-          (f) => f.path.split('/').pop() !== '.otter_rag.db',
+          (f) => {
+            const base = f.path.split('/').pop()
+            return Boolean(base) && !F.isHiddenWorkspaceFile(f.path)
+          },
         )
+        setHooks((r as { hooks?: Record<string, { ok?: boolean; issues?: string[] }> }).hooks || {})
         setFilesErr('')
         setFiles(list)
         if (follow) {
@@ -127,11 +145,12 @@ export default function ArtifactsPanel() {
   }, [taskId, refresh])
 
   useEffect(() => {
-    if (!taskId || done) return
+    if (!taskId) return
+    if (done && !streaming) return
     refresh()
-    const id = setInterval(refresh, 4000)
+    const id = setInterval(refresh, 2000)
     return () => clearInterval(id)
-  }, [taskId, done, refresh])
+  }, [taskId, done, streaming, refresh])
 
   // Sincronizar archivo seleccionado con la petición desde el chat (Studio target)
   useEffect(() => {
@@ -173,7 +192,7 @@ export default function ArtifactsPanel() {
     return () => {
       cancelled = true
     }
-  }, [taskId, selected])
+  }, [taskId, selected, liveFiles.length, streaming])
 
   // Ajustar la pestaña automáticamente al cambiar de archivo
   useEffect(() => {
@@ -226,6 +245,11 @@ export default function ArtifactsPanel() {
         <span className="truncate max-w-[140px]">
           <BaseName path={f.path} />
         </span>
+        {hooks[f.path] && hooks[f.path].ok === false && (
+          <span className="text-[10px] font-bold text-danger" title={(hooks[f.path].issues || []).join('\n')}>
+            syntax
+          </span>
+        )}
       </button>
     )
   })
@@ -235,7 +259,7 @@ export default function ArtifactsPanel() {
     : 'flex flex-1 min-w-0 h-full flex-col border-l border-line bg-canvas'
 
   return (
-    <aside className={asideClass}>
+    <section className={asideClass} aria-label="Artefactos">
       {/* Cabecera Principal */}
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-panel px-4">
         <div className="flex items-center gap-2">
@@ -257,6 +281,7 @@ export default function ArtifactsPanel() {
           )}
           <button
             type="button"
+            aria-label={maximized ? 'Restaurar panel' : 'Maximizar panel'}
             onClick={() => setMaximized(!maximized)}
             title={maximized ? 'Restaurar' : 'Maximizar'}
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink"
@@ -265,6 +290,7 @@ export default function ArtifactsPanel() {
           </button>
           <button
             type="button"
+            aria-label="Cerrar artefactos"
             onClick={() => setArtifactsOpen(false)}
             title="Cerrar vista partida"
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink"
@@ -386,9 +412,9 @@ export default function ArtifactsPanel() {
           </div>
         ) : activeTab === 'preview' && previewHtml ? (
           <iframe
-            className="h-full w-full rounded-xl border border-line bg-white shadow-sm"
+            className="h-full w-full rounded-xl border border-line bg-canvas shadow-sm"
             style={{ width: '100%', height: '100%', border: 'none' }}
-            sandbox="allow-scripts allow-same-origin allow-forms"
+            sandbox="allow-scripts allow-forms allow-popups"
             title="preview artefacto"
             srcDoc={F.hardenSrcdoc(raw)}
           />
@@ -396,6 +422,6 @@ export default function ArtifactsPanel() {
           <CodeViewer code={raw || '…'} />
         )}
       </div>
-    </aside>
+    </section>
   )
 }

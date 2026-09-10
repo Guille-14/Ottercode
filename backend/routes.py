@@ -1,27 +1,80 @@
 # OtterCode — capa HTTP REST: todos los endpoints /api (vía APIRouter)
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from events import SseEvent, sse, Route
+
+from backend.config import (
+    OLLAMA_BASE_URL, DEFAULT_MODEL, LLM_BACKEND, WORKSPACE_ROOT, _ollama_httpx,
+    MAX_REVIEW_ROUNDS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, APP_VERSION, DB_PATH, SOUL_PATH,
+    USER_PATH, _save_identity, VRAM_TOTAL_BYTES, _SOUL_CONTENT, _USER_CONTENT
+)
 from backend.vault import _memory_recall  # noqa: E402
 from backend.memory import get_memory, add_memory, delete_memory_item # noqa: E402
 from backend.runtime import ACTIVE_RUN, ACTIVITY, ACTIVITY_LOCK, RUN_LOCK, _activity_finish  # noqa: E402
 from backend.runstate import OtterRun  # noqa: E402
 from backend.prompts import extract_json_object  # noqa: E402
-from backend.profiles import _delete_profile, _get_profile, _load_active_profile, _load_profiles, _save_active_profile, _save_profile  # noqa: E402
+from backend.profiles import (
+    ProfileRequest, ActiveProfileRequest,
+    _delete_profile, _get_profile, _load_active_profile, _load_profiles,
+    _save_active_profile, _save_profile,
+)  # noqa: E402
+from backend.runstate import AbortRequested
 from backend.ollama import _LlmSession, fetch_models, flush_all_vram, flush_vram, invalidate_models_cache, stream_llm  # noqa: E402
+from backend.ctx_bench import load_ctx_bench, stream_benchmark  # noqa: E402
 from backend.history import HISTORY, _append_session_event  # noqa: E402
 from backend.engine import run_task_stream  # noqa: E402
 from backend.db import get_session_detail, search_history  # noqa: E402
-from backend.config import APP_VERSION, COMPACT_THRESHOLD_CHARS, DB_PATH, DEFAULT_MODEL, LLM_BACKEND, MAX_REVIEW_ROUNDS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, SOUL_PATH, USER_PATH, VRAM_TOTAL_BYTES, WORKSPACE_ROOT, _ollama_httpx, _save_identity  # noqa: E402
+from backend.config import APP_VERSION, DB_PATH, DEFAULT_MODEL, LLM_BACKEND, MAX_REVIEW_ROUNDS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, SOUL_PATH, USER_PATH, VRAM_TOTAL_BYTES, WORKSPACE_ROOT, _ollama_httpx, _save_identity  # noqa: E402
 from backend.agents import AGENT_FACTORY_SYSTEM, AGENT_ORDER, CORE_AGENTS, DYNAMIC_AGENTS, _load_skills_cfg, build_profile_prompt, get_agent, normalize_agent_profile, set_skill_enabled  # noqa: E402
-from backend.engine import *  # noqa: F401,F403
-from backend.agents import *  # noqa: F401,F403
+from backend.engine import (
+    run_task_stream, compact_run_now, PENDING_PERMISSIONS, PERMISSION_RESPONSES
+)
+from backend.agents import (
+    CORE_AGENTS, DYNAMIC_AGENTS, AGENT_ORDER, get_agent, set_skill_enabled,
+    normalize_agent_profile, build_profile_prompt, AGENT_FACTORY_SYSTEM, _load_skills_cfg
+)
 from backend.agents import _load_skills_cfg  # noqa
-from backend.ollama import *  # noqa: F401,F403
-from backend.runtime import *  # noqa: F401,F403
+from backend.ollama import (
+    flush_vram, flush_all_vram, fetch_models, invalidate_models_cache, resolve_coder_model,
+    stream_llm, _LlmSession
+)
+from backend.runtime import (
+    RUN_LOCK, ACTIVE_RUN, ACTIVITY_LOCK, ACTIVITY, _force_stop_run, _activity_set,
+    _activity_finish
+)
 from backend.runtime import _force_stop_run, _activity_set, _activity_finish  # noqa
-from backend.db import *  # noqa: F401,F403
+from backend.db import (
+    search_history, get_session_detail
+)
 from backend.history import HISTORY  # noqa
-from backend.vault import *  # noqa: F401,F403
+from backend.vault import (
+    router, _memory_recall
+)
 from fastapi import APIRouter  # noqa
 router = APIRouter(tags=["api"])
 
@@ -144,7 +197,6 @@ def api_status() -> Dict[str, Any]:
         # v3.3: defaults del motor de rendimiento (UI muestra el selector)
         "num_ctx_default": NUM_CTX_DEFAULT,
         "num_predict_default": NUM_PREDICT_DEFAULT,
-        "compact_chars": COMPACT_THRESHOLD_CHARS,
     }
 
 
@@ -175,6 +227,12 @@ def api_pulse() -> Dict[str, Any]:
     # v6.0 · solo inyectar DEFAULT_MODEL cuando Ollama respondió: si está
     # caído devolvemos [] para que la UI no crea que ya hay un modelo.
     merged = sorted(set(models)) if ok else sorted([])
+    if not ok:
+        health = "down"
+    elif activity.get("running") and not ps_models:
+        health = "loading"
+    else:
+        health = "online"
     return {
         "ok": ok,
         "version": APP_VERSION,
@@ -185,6 +243,7 @@ def api_pulse() -> Dict[str, Any]:
         "activity": activity,
         "num_ctx_default": NUM_CTX_DEFAULT,
         "vram_total": VRAM_TOTAL_BYTES,
+        "ollama_health": health,
     }
 
 
@@ -192,7 +251,33 @@ def api_pulse() -> Dict[str, Any]:
 def api_models() -> Dict[str, Any]:
     models = fetch_models()
     merged = sorted(set((models or []) + [DEFAULT_MODEL]))
-    return {"ollama_ok": models is not None, "models": merged}
+    details: List[Dict[str, Any]] = []
+    try:
+        resp = _ollama_httpx.get("/api/tags")
+        resp.raise_for_status()
+        for m in resp.json().get("models") or []:
+            if not isinstance(m, dict):
+                continue
+            name = str(m.get("name") or "")
+            size = int(m.get("size") or 0)
+            details.append({
+                "name": name,
+                "size": size,
+                "size_gb": round(size / (1024 ** 3), 2) if size else 0,
+                "vram_est_gb": round(size / (1024 ** 3) * 0.7, 2) if size else 0,
+            })
+    except Exception:
+        details = [{"name": n, "size": 0, "size_gb": 0, "vram_est_gb": 0} for n in merged]
+    from backend.profiles import suggest_model_for_role
+    return {
+        "ollama_ok": models is not None,
+        "models": merged,
+        "details": details,
+        "suggest": {
+            "Programador": suggest_model_for_role("Programador", merged),
+            "resumen": suggest_model_for_role("resumen", merged),
+        },
+    }
 
 
 @router.get(Route.PS)
@@ -243,7 +328,12 @@ def api_flush(req: FlushRequest) -> JSONResponse:
 @router.get(Route.SETTINGS)
 def api_settings_get() -> Dict[str, Any]:
     import backend.settings as _s
-    return {"ok": True, "settings": _s.load_runtime_settings()}
+    from backend.ctx_bench import load_ctx_bench
+    return {
+        "ok": True,
+        "settings": _s.load_runtime_settings(),
+        "ctx_bench": load_ctx_bench(),
+    }
 
 
 class SettingsRequest(BaseModel):
@@ -275,7 +365,7 @@ def api_settings_apply_profile() -> Dict[str, Any]:
     active = _otter_profiles._ACTIVE_PROFILE or {}
     name = active.get("name") or "default"
     prof = _otter_profiles._get_profile(name) or active
-    prof["temperature"] = s.get("temperature", 0.7)
+    prof["temperature"] = s.get("temperature", 0.2)
     prof["top_p"] = s.get("top_p", 0.9)
     prof["num_ctx"] = s.get("num_ctx", NUM_CTX_DEFAULT)
     try:
@@ -295,6 +385,47 @@ _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 class ModelNameRequest(BaseModel):
     model: str = Field(min_length=1, max_length=120)
+
+
+class CtxBenchRequest(BaseModel):
+    model: str = ""
+
+
+class CtxApplyRequest(BaseModel):
+    num_ctx: int = Field(ge=2048, le=131072)
+    model: str = ""
+
+
+@router.post(Route.CTX_BENCH)
+def api_ctx_bench(req: CtxBenchRequest) -> StreamingResponse:
+    """B1 · Recalibrar num_ctx (SSE, GPU exclusiva)."""
+    model = (req.model or "").strip() or DEFAULT_MODEL
+    RUN_LOCK.steal_if_stale()
+    if not RUN_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Hay una misión en curso: aborta o espera para calibrar.")
+
+    def gen() -> Iterator[str]:
+        try:
+            yield from stream_benchmark(model)
+        except Exception as exc:  # noqa: BLE001
+            yield sse(SseEvent.task_error, {"message": f"Calibración: {exc}"})
+        finally:
+            RUN_LOCK.release()
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@router.post(Route.CTX_BENCH_APPLY)
+def api_ctx_bench_apply(req: CtxApplyRequest) -> Dict[str, Any]:
+    import backend.settings as _s
+    if (req.model or "").strip():
+        saved = _s.set_num_ctx_for_model(req.model.strip(), int(req.num_ctx))
+    else:
+        saved = _s.save_runtime_settings({"num_ctx": int(req.num_ctx)})
+    for run in list(ACTIVE_RUN.values()):
+        if not req.model or run.model == req.model:
+            run.num_ctx = int(req.num_ctx)
+    return {"ok": True, "num_ctx": int(req.num_ctx), "settings": saved}
 
 
 class ModelCreateRequest(BaseModel):
@@ -457,6 +588,25 @@ def api_model_show(req: ModelNameRequest) -> Dict[str, Any]:
         return text if len(text) <= limit else text[:limit] + "\n… (truncado)"
 
     details = data.get("details") or {}
+    from backend.ollama import model_supports_vision, parse_context_length, strip_image_b64  # noqa: F401
+    ctx_max = parse_context_length(data) or parse_context_length({"parameters": data.get("parameters"), "modelfile": data.get("modelfile"), "model_info": data.get("model_info") or {}})
+    size_b = 0
+    try:
+        size_b = int((data.get("size") or details.get("parameter_size") or 0) or 0)
+    except (TypeError, ValueError):
+        size_b = 0
+    used_vram = 0
+    try:
+        ps = _ollama_httpx.get("/api/ps").json()
+        used_vram = sum(int(m.get("size_vram") or 0) for m in (ps.get("models") or []) if isinstance(m, dict))
+    except Exception:
+        used_vram = 0
+    free = max(0, int(VRAM_TOTAL_BYTES) - used_vram)
+    import backend.settings as _s
+    fit = _s.suggest_num_ctx(req.model, context_max=ctx_max, size_bytes=size_b, vram_free=free)
+    vision = model_supports_vision(req.model, {**data, **details, "family": details.get("family"), "capabilities": data.get("capabilities")})
+    from backend.model_probe import get_model_tools_capable
+    tools_cap = get_model_tools_capable(req.model, data)
     return {
         "ok": True,
         "model": req.model,
@@ -469,6 +619,14 @@ def api_model_show(req: ModelNameRequest) -> Dict[str, Any]:
         "families": details.get("families"),
         "parameter_size": details.get("parameter_size"),
         "quantization_level": details.get("quantization_level"),
+        "capabilities": data.get("capabilities") or [],
+        "context_length": ctx_max or None,
+        "vision": vision,
+        "tools": tools_cap,
+        "suggested_num_ctx": fit.get("num_ctx"),
+        "ctx_source": fit.get("source"),
+        "vram_warn": fit.get("warn") or "",
+        "vram_free": free,
     }
 
 
@@ -476,6 +634,7 @@ def api_model_show(req: ModelNameRequest) -> Dict[str, Any]:
 
 @router.get(Route.SKILLS)
 def api_skills() -> Dict[str, Any]:
+    from backend.md_skills import list_md_skills
     disabled = set(_load_skills_cfg().get("disabled", []))
     skills = []
     for name, meta in tools.TOOLS.items():
@@ -485,6 +644,16 @@ def api_skills() -> Dict[str, Any]:
             "desc": meta.get("desc", ""),
             "writes_fs": bool(meta.get("writes_fs")),
             "enabled": name not in disabled,
+            "kind": "tool",
+        })
+    for md in list_md_skills():
+        skills.append({
+            "name": md["name"],
+            "cat": md["cat"],
+            "desc": md["desc"],
+            "writes_fs": False,
+            "enabled": md["enabled"],
+            "kind": "markdown",
         })
     skills.sort(key=lambda sk: (sk["cat"], sk["name"]))
     return {"skills": skills, "disabled": sorted(disabled)}
@@ -497,11 +666,13 @@ class SkillToggleRequest(BaseModel):
 
 @router.post(Route.SKILLS_CONFIG)
 def api_skills_config(req: SkillToggleRequest) -> Dict[str, Any]:
+    from backend.md_skills import md_skill_names
     canonical = tools.resolve_name(req.tool.strip())
-    if canonical not in tools.TOOLS:
+    if canonical not in tools.TOOLS and req.tool.strip() not in md_skill_names():
         raise HTTPException(status_code=400, detail=f"Skill desconocida: {req.tool}")
-    set_skill_enabled(canonical, req.enabled)
-    return {"ok": True, "tool": canonical, "enabled": req.enabled}
+    name = canonical if canonical in tools.TOOLS else req.tool.strip()
+    set_skill_enabled(name, req.enabled)
+    return {"ok": True, "tool": name, "enabled": req.enabled}
 
 
 # --------------------------- AGENTES DINÁMICOS ------------------------------
@@ -653,6 +824,7 @@ def api_agents_create(req: AgentCreateRequest) -> StreamingResponse:
     también es un turno) → token… → agent_created (perfil completo, listo
     para ser inyectado en la cadena por el Arquitecto).
     """
+    RUN_LOCK.steal_if_stale()
     if not RUN_LOCK.acquire(blocking=False):
         raise HTTPException(
             status_code=409,
@@ -732,8 +904,8 @@ class TaskRequest(BaseModel):
     task: str = Field(min_length=1, max_length=8000)
     model: str = DEFAULT_MODEL
     loop_mode: bool = False
-    mode: str = "chain"                  # "chain" | "chat"
-    start_agent: str = "architect"       # architect|researcher|developer|reviewer
+    mode: str = "chat"                   # "chat" (agente único) | "chain"
+    start_agent: str = "agent"           # chat: Otter; chain: se mapea a architect si hace falta
     hacker: bool = False                 # 🏴 prompt sin censura (denylist intacta)
     num_ctx: Optional[int] = Field(default=None, ge=2048, le=131072)
     force: bool = False                  # aborta la misión en curso y toma el relevo
@@ -754,6 +926,10 @@ class TaskRequest(BaseModel):
     yolo: bool = False
     # B · tope configurable del bucle Programador↔Revisor
     max_rounds: Optional[int] = Field(default=None, ge=1, le=25)
+    skill: Optional[str] = Field(default=None, max_length=64)
+    resume_checkpoint: Optional[str] = Field(default=None, max_length=80)
+    project_root: Optional[str] = Field(default=None, max_length=500)
+    images: Optional[List[str]] = None
 
 
 @router.post(Route.TASK)
@@ -765,8 +941,16 @@ def api_task(req: TaskRequest) -> StreamingResponse:
         _p = _get_profile(req.profile)
         if _p:
             _task_profile = _p
+    # Bucle sin mode explícito: cadena clásica (selftest T1).
+    # Si el cliente pide mode=chat + loop, el Revisor entra en modo agente (T43a).
+    if req.loop_mode and "mode" not in req.model_fields_set:
+        req.mode = "chain"
+        if "start_agent" not in req.model_fields_set:
+            req.start_agent = "architect"
     if req.mode not in ("chain", "chat"):
         raise HTTPException(status_code=400, detail="mode debe ser 'chain' o 'chat'.")
+    if req.mode == "chain" and req.start_agent not in AGENT_ORDER:
+        req.start_agent = "architect"
     # v4.3 · 'agent' (Claude Code) solo tiene sentido en modo chat
     # v6.0 · Fase 1 · PERFILES: en modo chat puedes hablar con CUALQUIER
     # agente registrado (Otter, núcleo, presets o creados con la Fábrica).
@@ -792,6 +976,7 @@ def api_task(req: TaskRequest) -> StreamingResponse:
                 status_code=404,
                 detail=f"No existe la conversación '{req.continue_task}' para continuar.",
             )
+    RUN_LOCK.steal_if_stale()
     if not RUN_LOCK.acquire(blocking=False):
         # v3.3 · TOMAR EL RELEVO: con force=True se aborta la misión en curso
         # (cierre agresivo del socket incluido) y se espera a que el lock
@@ -801,14 +986,17 @@ def api_task(req: TaskRequest) -> StreamingResponse:
                 _force_stop_run(active)
             deadline = time.time() + 8.0
             while time.time() < deadline:
+                RUN_LOCK.steal_if_stale()
                 if RUN_LOCK.acquire(blocking=False):
                     break
                 time.sleep(0.15)
             else:
-                raise HTTPException(
-                    status_code=409,
-                    detail="La misión anterior no liberó el relevo a tiempo; reintenta en unos segundos.",
-                )
+                RUN_LOCK.steal_if_stale()
+                if not RUN_LOCK.acquire(blocking=False):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="La misión anterior no liberó el relevo a tiempo; reintenta en unos segundos.",
+                    )
         else:
             raise HTTPException(
                 status_code=409,
@@ -840,16 +1028,23 @@ def api_task(req: TaskRequest) -> StreamingResponse:
     task_id = adopted_task_id or (
         datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     )
-    workdir = WORKSPACE_ROOT / task_id
+    from backend.project import resolve_workdir
+    from backend.workspace_git import ensure_mission_git, maybe_auto_rag
+    workdir = resolve_workdir(task_id, req.project_root)
     workdir.mkdir(parents=True, exist_ok=True)
+    try:
+        ensure_mission_git(workdir, task_id)
+    except Exception:
+        pass
+    maybe_auto_rag(workdir)
 
     run = OtterRun(
         task_id, req.task.strip(),
-        req.model.strip() or _task_profile.get("model", DEFAULT_MODEL),
+        resolve_coder_model(req.model.strip() or _task_profile.get("model", DEFAULT_MODEL)),
         req.loop_mode, req.mode, req.start_agent, workdir,
         hacker=bool(req.hacker),
         num_ctx=req.num_ctx or _task_profile.get("num_ctx"),
-        temperature=_task_profile.get("temperature", 0.7),
+        temperature=_task_profile.get("temperature"),
         top_p=_task_profile.get("top_p", 0.9),
         goal=req.goal, plan_only=req.plan_only,
         ultra_review=req.ultra_review, resume_plan=req.resume_plan,
@@ -860,6 +1055,19 @@ def api_task(req: TaskRequest) -> StreamingResponse:
     )
     # FASE 4 · YOLO guard
     run.yolo = bool(req.yolo)
+    try:
+        from backend.ollama import strip_image_b64
+        run._images = [strip_image_b64(x) for x in (req.images or []) if str(x).strip()][:4]
+    except Exception:
+        run._images = []
+    if not req.num_ctx:
+        try:
+            import backend.settings as _s
+            by = (_s.load_runtime_settings().get("num_ctx_by_model") or {})
+            if by.get(run.model):
+                run.num_ctx = int(by[run.model])
+        except Exception:
+            pass
 
     # 🧵 hilo adoptado: precargar el transcript previo SIN duplicar el mensaje
     # del usuario — OtterRun.__init__ ya añadió la entrada user y los marcadores
@@ -869,12 +1077,21 @@ def api_task(req: TaskRequest) -> StreamingResponse:
         _init_user = run.transcript[0]          # entrada user del turno actual
         _init_sys = [e for e in run.transcript if e.get("kind") == "system"]
         run.transcript = list(prev_transcript) + [_init_user] + _init_sys
-        if prev_meta and isinstance(prev_meta, dict):
-            pass  # conservamos el task inicial del run (el de la misión)
-    else:
-        pass  # __init__ ya registró la entrada user y el system ⚓
+        try:
+            existing = [f for f in run.executor.list_workspace()
+                        if not str((f.get("path") if isinstance(f, dict) else f) or "").startswith(".")]
+            if existing:
+                run._files_ever_written = True
+        except Exception:
+            pass
 
     run.memory_block = _memory_recall(run.task_text)   # 🧠 recuerdo del vault
+    if req.resume_checkpoint:
+        from backend.runstate import resume_summary
+        _rs = resume_summary(req.resume_checkpoint)
+        if _rs:
+            run.system_inject = (run.system_inject or "") + "\n\n" + _rs
+            run.transcript.append({"kind": "system", "text": "▶ Reanudando desde checkpoint " + req.resume_checkpoint})
     ACTIVE_RUN[run.task_id] = run
     # Dedup en el historial: si el hilo ya tenía meta, reemplázalo (1 fila) y
     # CONSERVA el título original de la conversación (no el del nuevo mensaje).
@@ -897,10 +1114,56 @@ def api_task(req: TaskRequest) -> StreamingResponse:
                   agent_icon=get_agent(run.start_agent).icon,
                   iteration=0, last_tool=None, last_tool_ok=None)
 
+    from backend.router import route, direct_reply
+    from backend.md_skills import get_md_skill, active_skill_prompt
+    _decision = {"tipo": "agente", "destino": req.start_agent}
+    if os.environ.get("OTTERCODE_ROUTER", "1") != "0" and not req.continue_task:
+        try:
+            _decision = route(req.task)
+        except Exception:
+            pass
+    if req.skill:
+        _decision = {"tipo": "skill", "destino": req.skill}
+        sk = get_md_skill(req.skill)
+        if sk:
+            extra = f"\n\n# SKILL {sk['name']}\n{sk['body'][:4000]}"
+            run.system_inject = (run.system_inject or "") + extra
+    elif _decision.get("tipo") == "skill":
+        sk = get_md_skill(str(_decision.get("destino") or ""))
+        if sk:
+            run.system_inject = (run.system_inject or "") + f"\n\n# SKILL {sk['name']}\n{sk['body'][:4000]}"
+
     def generator() -> Iterator[str]:
         """Puente cola+worker: si el modelo está cargando a VRAM y no fluyen
         tokens, emite heartbeats SSE (': heartbeat') para que ningún proxy
         o cliente corte la conexión por inactividad."""
+        # Un solo modelo en VRAM: el router pequeño no puede convivir con el
+        # especialista (8 GB → offload a CPU y ~10 tok/s).
+        if _decision.get("tipo") != "directo":
+            try:
+                from backend.router import ROUTER_MODEL
+                if ROUTER_MODEL and ROUTER_MODEL != run.model:
+                    flush_vram(ROUTER_MODEL)
+            except Exception:
+                pass
+        if _decision.get("tipo") == "directo" and req.mode == "chat":
+            try:
+                yield sse(SseEvent.session_id, {"task_id": run.task_id})
+                yield sse(SseEvent.system, {"text": "⚡ router (modelo pequeño, keep_alive=-1)"})
+                text = direct_reply(req.task)
+                for ch in text:
+                    yield sse(SseEvent.token, {"agent": "router", "token": ch})
+                run.transcript.append({"kind": "agent", "agent": "router", "text": text})
+                yield sse(SseEvent.task_done, {
+                    "task_id": run.task_id, "mode": "chat", "approved": True,
+                    "iterations": 0, "files": [], "duration_s": 0, "review_verdict": "",
+                    "injected_agents": [], "router": True,
+                })
+            finally:
+                _activity_finish("done")
+                RUN_LOCK.release()
+                ACTIVE_RUN.pop(run.task_id, None)
+            return
         q: "queue.Queue" = queue.Queue()
         sentinel = object()
 
@@ -1105,6 +1368,12 @@ def api_workspace(task_id: Optional[str] = None) -> Dict[str, Any]:
     tree = _ws_node(workdir, budget)
     if not tree:
         raise HTTPException(status_code=500, detail="Workspace ilegible.")
+    from backend.hooks import load_file_hooks
+    try:
+        from backend.workspace_git import maybe_auto_rag
+        maybe_auto_rag(workdir)
+    except Exception:
+        pass
     return {
         "ok": True,
         "task_id": tid,
@@ -1118,10 +1387,31 @@ def api_workspace(task_id: Optional[str] = None) -> Dict[str, Any]:
         },
         "truncated": budget[0] <= 0,
         "tree": tree.get("children", []),
+        "hooks": load_file_hooks(workdir),
     }
 
 
 # --------------------------- Entregables / archivos ------------------------
+
+class FileSaveRequest(BaseModel):
+    task_id: str
+    path: str
+    content: str = ""
+
+
+@router.post(Route.FILE_SAVE)
+def api_file_save(req: FileSaveRequest) -> Dict[str, Any]:
+    """Guarda un archivo del workspace desde Studio (edición humana)."""
+    workdir, tid = _resolve_workspace(req.task_id)
+    try:
+        executor = tools.ToolExecutor(workdir)
+        target = executor.resolve_safe(req.path)
+    except tools.ToolError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(req.content, encoding="utf-8")
+    return {"ok": True, "task_id": tid, "path": req.path, "bytes": len(req.content.encode("utf-8"))}
+
 
 @router.get(Route.FILE)
 def api_file(task_id: str, path: str, download: int = 0):
@@ -1313,12 +1603,99 @@ def api_skills_enable(req: SkillEnableRequest) -> Dict[str, Any]:
 class ApproveRequest(BaseModel):
     id: str
     allow: bool
+    always: bool = False
+
+@router.get(Route.PROJECT)
+def api_project_get() -> Dict[str, Any]:
+    from backend.project import load_project
+    return load_project()
+
+
+class ProjectRequest(BaseModel):
+    path: str = ""
+
+
+@router.post(Route.PROJECT)
+def api_project_set(req: ProjectRequest) -> Dict[str, Any]:
+    from backend.project import save_project
+    try:
+        return save_project(req.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get(Route.MCP)
+def api_mcp() -> Dict[str, Any]:
+    try:
+        import mcp_client
+        mgr = mcp_client.get_mcp_manager()
+        ready = False
+        try:
+            ready = bool(mcp_client.mcp_loop.is_ready())
+        except Exception:
+            ready = bool(mgr.is_available)
+        servers = []
+        for name, sess in (mgr.sessions or {}).items():
+            conn = (mgr._connections or {}).get(name)
+            servers.append({
+                "name": name,
+                "connected": bool(conn and conn.connected),
+                "tools": list(conn.tools) if conn else [],
+            })
+        return {
+            "ok": True,
+            "ready": ready,
+            "servers": servers,
+            "tools": list(mgr.tools_catalog.keys()),
+        }
+    except Exception as exc:
+        return {"ok": False, "ready": False, "servers": [], "tools": [], "error": str(exc)}
+
+
+@router.get(Route.TODOS)
+def api_todos(task_id: Optional[str] = None) -> Dict[str, Any]:
+    workdir, tid = _resolve_workspace(task_id)
+    p = workdir / ".otter_todo.json"
+    items: List[Dict[str, Any]] = []
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                items = [x for x in data if isinstance(x, dict)]
+        except (json.JSONDecodeError, OSError):
+            items = []
+    return {"ok": True, "task_id": tid, "todos": items}
+
+
+class CompactRequest(BaseModel):
+    task_id: Optional[str] = None
+
+
+@router.post(Route.COMPACT)
+def api_compact(req: CompactRequest) -> Dict[str, Any]:
+    tid = (req.task_id or "").strip()
+    run = ACTIVE_RUN.get(tid) if tid else (next(iter(ACTIVE_RUN.values()), None) if ACTIVE_RUN else None)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No hay misión activa para compactar.")
+    from backend.engine import compact_run_now
+    return compact_run_now(run)
+
+
+@router.post("/api/mission/undo")
+def api_mission_undo(task_id: Optional[str] = None) -> Dict[str, Any]:
+    workdir, tid = _resolve_workspace(task_id)
+    from backend.workspace_git import reset_mission
+    return {**reset_mission(workdir), "task_id": tid}
+
 
 @router.post("/api/approve")
 def api_approve(req: ApproveRequest):
     from backend.engine import PENDING_PERMISSIONS, PERMISSION_RESPONSES
     if req.id in PENDING_PERMISSIONS:
         PERMISSION_RESPONSES[req.id] = req.allow
+        if req.always and req.allow:
+            for _run in list(ACTIVE_RUN.values()):
+                setattr(_run, "_session_allow", True)
         PENDING_PERMISSIONS[req.id].set()
         return {"ok": True}
     return {"ok": False, "detail": "Solicitud no encontrada"}

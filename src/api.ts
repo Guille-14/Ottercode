@@ -48,7 +48,6 @@ export interface Status {
   api: string
   num_ctx_default: number
   num_predict_default: number
-  compact_chars: number
 }
 
 export interface Skill {
@@ -57,6 +56,7 @@ export interface Skill {
   desc: string
   writes_fs: boolean
   enabled: boolean
+  kind?: string
 }
 
 export interface SkillsResponse {
@@ -153,6 +153,7 @@ export interface WorkspaceResponse {
   stats: WorkspaceStats
   truncated?: boolean
   tree: TreeNode[]
+  hooks?: Record<string, { ok?: boolean; issues?: string[] }>
 }
 
 export interface ProfileActiveResponse {
@@ -195,13 +196,18 @@ export function fetchWithAuth(
   const headers = new Headers(init.headers)
   if (authToken) headers.set('X-Otter-Token', authToken)
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  let timeoutId = 0
+  if (timeoutMs > 0) {
+    timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+  }
   if (init.signal) {
     if (init.signal.aborted) controller.abort()
     else init.signal.addEventListener('abort', () => controller.abort(), { once: true })
   }
   return rawFetch(url, { ...init, headers, signal: controller.signal }).finally(
-    () => clearTimeout(timeoutId),
+    () => {
+      if (timeoutId) clearTimeout(timeoutId)
+    },
   )
 }
 
@@ -242,7 +248,10 @@ export const api = {
   status: () => j<Status>(fetchWithAuth(`${BASE}/status`)),
   pulse: () => j<Pulse>(fetchWithAuth(`${BASE}/pulse`)),
   system: () => j<SystemStats>(fetchWithAuth(`${BASE}/system`)),
-  settings: () => j<{ ok: boolean; settings: Record<string, unknown> }>(fetchWithAuth(`${BASE}/settings`)),
+  settings: () =>
+    j<{ ok: boolean; settings: Record<string, unknown>; ctx_bench?: Record<string, unknown> }>(
+      fetchWithAuth(`${BASE}/settings`),
+    ),
   saveSettings: (settings: Record<string, unknown>) =>
     j<{ ok: boolean; settings: Record<string, unknown> }>(
       fetchWithAuth(`${BASE}/settings`, {
@@ -356,6 +365,20 @@ export const api = {
     j<{ ok: boolean }>(
       fetchWithAuth(`${API_HISTORY}/${encodeURIComponent(taskId)}`, { method: 'DELETE' }),
     ),
+  historyRename: (taskId: string, name: string) =>
+    j<{ ok: boolean; id: string; name: string }>(
+      fetchWithAuth(`${API_HISTORY}/${encodeURIComponent(taskId)}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }),
+    ),
+  missionUndo: (taskId?: string) =>
+    j<{ ok: boolean }>(
+      fetchWithAuth(`/api/mission/undo${taskId ? `?task_id=${encodeURIComponent(taskId)}` : ''}`, {
+        method: 'POST',
+      }),
+    ),
   profiles: () => j<ProfileResponse>(fetchWithAuth(API_PROFILES)),
   activeProfile: () => j<ProfileActiveResponse>(fetchWithAuth(`${API_PROFILES}/active`)),
   setActiveProfile: (name: string) =>
@@ -400,9 +423,99 @@ export const api = {
     j<{ tree: unknown }>(
       fetchWithAuth(`${BASE}/tree?${new URLSearchParams(taskId ? { task_id: taskId, path } : { path })}`),
     ),
+  checkpoints: () =>
+    j<{ unfinished: { task_id: string; last: Record<string, unknown>; steps: number }[] }>(
+      fetchWithAuth(`${BASE}/checkpoints`),
+    ),
   workspace: (taskId: string) =>
     j<WorkspaceResponse>(fetchWithAuth(`${BASE}/workspace?task_id=${encodeURIComponent(taskId)}`)),
   zipUrl: (taskId: string) => `${BASE}/task/${encodeURIComponent(taskId)}/zip`,
   fileUrl: (taskId: string, path: string) =>
     `${BASE}/file?task_id=${encodeURIComponent(taskId)}&path=${encodeURIComponent(path)}`,
+  saveFile: (taskId: string, path: string, content: string) =>
+    j<{ ok: boolean; path: string; bytes: number }>(
+      fetchWithAuth(`${BASE}/file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId, path, content }),
+      }),
+    ),
+  project: () => j<{ path: string; ok: boolean }>(fetchWithAuth(`${BASE}/project`)),
+  setProject: (path: string) =>
+    j<{ ok: boolean; path: string }>(
+      fetchWithAuth(`${BASE}/project`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      }),
+    ),
+  todos: (taskId?: string) =>
+    j<{ ok: boolean; task_id: string; todos: { content?: string; status?: string; evidence?: string }[] }>(
+      fetchWithAuth(`${BASE}/todos${taskId ? `?task_id=${encodeURIComponent(taskId)}` : ''}`),
+    ),
+  compactNow: (taskId?: string) =>
+    j<{ ok: boolean; summary?: string; still_over?: boolean }>(
+      fetchWithAuth(`${BASE}/compact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId || null }),
+      }),
+    ),
+  ctxBench: (
+    model: string,
+    onEvent: (name: string, data: Record<string, unknown>) => void,
+  ): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      let buf = ''
+      fetchWithAuth(
+        `${BASE}/ctx-bench`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model }),
+        },
+        600_000,
+      )
+        .then(async (r) => {
+          if (!r.ok) {
+            let detail = `HTTP ${r.status}`
+            try {
+              const b = await r.json()
+              if (b && b.detail) detail = String(b.detail)
+            } catch {
+              /* */
+            }
+            throw new Error(detail)
+          }
+          if (!r.body) return resolve()
+          const reader = r.body.getReader()
+          const dec = new TextDecoder()
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += dec.decode(value, { stream: true })
+            let i
+            while ((i = buf.indexOf('\n\n')) >= 0) {
+              const chunk = buf.slice(0, i)
+              buf = buf.slice(i + 2)
+              const parsed = parseSse(chunk)
+              for (const ev of parsed) onEvent(ev.name, ev.data)
+            }
+          }
+          resolve()
+        })
+        .catch(reject)
+    }),
+  applyCtx: (num_ctx: number) =>
+    j<{ ok: boolean; num_ctx: number }>(
+      fetchWithAuth(`${BASE}/ctx-bench/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ num_ctx }),
+      }),
+    ),
+  mcp: () =>
+    j<{ ok: boolean; ready: boolean; servers: { name: string; connected: boolean; tools: string[] }[]; tools: string[] }>(
+      fetchWithAuth(`${BASE}/mcp`),
+    ),
 }

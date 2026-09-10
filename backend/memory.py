@@ -1,25 +1,182 @@
-import os
-from pathlib import Path
-from typing import List, Dict
+"""Memoria automática persistente (SQLite) — preferencias duraderas del usuario."""
+from __future__ import annotations
 
-MEMORY_PATH = Path("memory.md")
+import os
+import re
+import sqlite3
+from datetime import datetime
+from typing import Any, List, Optional
+
+from backend.config import DB_PATH, LLM_BACKEND, NUM_CTX_DEFAULT, OLLAMA_BASE_URL
+from backend.agents import _chat_base
+from backend.ollama import _ollama_ndjson_text
+import requests
+
+_EXTRACT_SYSTEM = (
+    "Extrae en una sola frase cualquier preferencia o dato duradero sobre el "
+    "usuario en este intercambio, o responde exactamente NADA si no hay nada "
+    "relevante. Sin comillas, sin preámbulo."
+)
+
+
+def _conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agente_id TEXT,
+            contenido TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )"""
+    )
+    return conn
+
 
 def get_memory() -> str:
-    if not MEMORY_PATH.exists():
+    """Texto listo para inyectar en el system prompt (memorias recientes)."""
+    try:
+        conn = _conn()
+        rows = conn.execute(
+            "SELECT contenido, timestamp FROM memories ORDER BY id DESC LIMIT 24"
+        ).fetchall()
+        conn.close()
+    except Exception:
         return ""
-    return MEMORY_PATH.read_text(encoding="utf-8")
+    sqlite_txt = ""
+    if rows:
+        lines = [f"- {c} ({ts})" for c, ts in rows]
+        sqlite_txt = "\n".join(reversed(lines))
+    vault_txt = ""
+    try:
+        from backend.vault import _memory_recall
+        vault_txt = (_memory_recall("preferencias usuario perfil") or "").strip()[:800]
+    except Exception:
+        vault_txt = ""
+    parts = [p for p in (sqlite_txt, vault_txt) if p]
+    return "\n\n".join(parts)
 
-def update_memory(new_memory: str):
-    MEMORY_PATH.write_text(new_memory, encoding="utf-8")
 
-def add_memory(memory_item: str):
-    current = get_memory()
-    new_content = f"{current.strip()}\n\n- {memory_item.strip()}" if current else f"- {memory_item.strip()}"
-    update_memory(new_content)
+def add_memory(memory_item: str, agente_id: Optional[str] = None) -> None:
+    item = (memory_item or "").strip()
+    if not item or item.upper() == "NADA":
+        return
+    if len(item) > 400:
+        item = item[:400]
+    try:
+        conn = _conn()
+        dup = conn.execute(
+            "SELECT 1 FROM memories WHERE contenido = ? LIMIT 1", (item,)
+        ).fetchone()
+        if dup:
+            conn.close()
+            return
+        conn.execute(
+            "INSERT INTO memories (agente_id, contenido, timestamp) VALUES (?,?,?)",
+            (agente_id, item, datetime.now().strftime("%Y-%m-%d %H:%M")),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
-def delete_memory_item(item_index: int):
-    # Lógica simplificada: eliminamos línea por línea
-    lines = [line for line in get_memory().split('\n') if line.strip().startswith('-')]
-    if 0 <= item_index < len(lines):
-        lines.pop(item_index)
-        update_memory('\n'.join(lines))
+
+def delete_memory_item(item_index: int) -> None:
+    try:
+        conn = _conn()
+        rows = conn.execute("SELECT id FROM memories ORDER BY id ASC").fetchall()
+        if 0 <= item_index < len(rows):
+            conn.execute("DELETE FROM memories WHERE id = ?", (rows[item_index][0],))
+            conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+_PREF_RX = re.compile(
+    r"(?i)\b(prefiero|me gusta|usa |no uses |siempre |nunca |quiero |a menos que )\b.{0,120}"
+)
+
+_SMALL_RX = re.compile(r"(?i)(?:^|[:/\-_])(1b|1\.5b|1\.7b|2b|3b|3\.8b)(?:[:\-_]|$)")
+_memory_llm_logged = False
+
+
+def pick_memory_llm_model() -> str:
+    """Consulta GET /api/tags y elige un modelo 1b/1.5b/3b/3.8b. Vacío = regex."""
+    global _memory_llm_logged
+    if os.environ.get("OTTERCODE_MEMORY_LLM", "1").strip().lower() in ("0", "false", "no"):
+        return ""
+    names: List[str] = []
+    try:
+        from backend.config import OLLAMA_BASE_URL
+        resp = requests.get(f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags", timeout=5)
+        resp.raise_for_status()
+        names = [str(m.get("name") or "") for m in (resp.json().get("models") or []) if m.get("name")]
+    except Exception:
+        try:
+            from backend.ollama import fetch_models
+            names = fetch_models() or []
+        except Exception:
+            names = []
+    hit = ""
+    for n in names:
+        if _SMALL_RX.search(str(n).lower()):
+            hit = str(n)
+            break
+    if not hit and not _memory_llm_logged:
+        print("MEMORY_LLM desactivado: no hay modelo pequeño disponible", flush=True)
+        _memory_llm_logged = True
+    return hit
+
+
+def harvest_memory(run: Any, agent_id: str = "", last_text: str = "") -> None:
+    """Tras una respuesta: heurística; LLM extra solo con modelo pequeño."""
+    user_bit = str(getattr(run, "task_text", "") or "")[:800]
+    asst = (last_text or "")[:1200]
+    blob = f"{user_bit}\n{asst}"
+    for m in _PREF_RX.finditer(blob):
+        add_memory(m.group(0).strip(), agente_id=agent_id or None)
+    model = pick_memory_llm_model()
+    if not model:
+        return
+    if not user_bit.strip() and not asst.strip():
+        return
+    material = f"USUARIO: {user_bit}\nAGENTE: {asst}"
+    num_ctx = getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT
+    try:
+        if LLM_BACKEND == "openai":
+            resp = requests.post(
+                f"{_chat_base()}/chat/completions",
+                json={
+                    "model": model,
+                    "stream": False,
+                    "max_tokens": 80,
+                    "messages": [
+                        {"role": "system", "content": _EXTRACT_SYSTEM},
+                        {"role": "user", "content": material},
+                    ],
+                },
+                timeout=(5, 45),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            out = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        else:
+            resp = requests.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": material,
+                    "system": _EXTRACT_SYSTEM,
+                    "stream": False,
+                    "options": {"num_ctx": min(int(num_ctx), 4096), "num_predict": 80, "num_gpu": 99},
+                },
+                timeout=(5, 45),
+            )
+            resp.raise_for_status()
+            out = _ollama_ndjson_text(resp.text) or ""
+    except Exception:
+        return
+    out = (out or "").strip().splitlines()[0].strip() if out else ""
+    if not out or out.upper().startswith("NADA"):
+        return
+    add_memory(out, agente_id=agent_id or None)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ottercode"
-version = "3.0.0"
+dynamic = ["version"]
 description = "Orquestador local de agentes autónomos con Ollama y MCP"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,14 +13,37 @@ dependencies = [
     "uvicorn[standard]>=0.28.0",
     "websockets>=12.0",
     "pydantic>=2.6.0",
+    "pydantic-settings>=2.0",
     "requests>=2.31.0",
     "httpx>=0.27.0",
     "sqlite-vec>=0.1.0",
     "mcp>=1.0.0",
-    "python-dotenv>=1.0.0"
+    "python-dotenv>=1.0.0",
+    "rich>=13.0",
+    "textual>=0.80.0",
+    "croniter>=2.0.0",
 ]
+
+[project.optional-dependencies]
+cli = ["textual>=0.80.0", "prompt_toolkit>=3.0"]
+dev = ["pytest>=7.0", "mypy", "bandit"]
+
+[project.scripts]
+ottercode = "ottercode_cli.main:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "backend.config.APP_VERSION"}
+
+[tool.setuptools]
+package-dir = {"" = "."}
+py-modules = ["tools", "events", "sandbox", "rag", "mcp_client"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*", "ottercode_cli*"]
+exclude = ["src*", "frontend*", "tests*", "dev*", "static*"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q"
-testpaths = ["dev"]
+testpaths = ["dev", "tests"]

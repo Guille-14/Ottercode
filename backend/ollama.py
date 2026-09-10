@@ -1,9 +1,43 @@
 # OtterCode — transporte LLM: sesiones, VRAM flush, streaming, errores
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from backend.secrets_filter import redact_text
+from events import SseEvent, sse, Route
+
+from backend.config import (
+    OLLAMA_BASE_URL, DEFAULT_MODEL, LLM_BACKEND, _ollama_session, _ollama_httpx,
+    FLUSH_WAIT_SECONDS, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, KEEP_ALIVE_DEFAULT,
+    native_tools_enabled, GENERATE_TIMEOUT
+)
+import tools  # noqa: E402
 from backend.runstate import OtterRun  # noqa: E402
 from backend.history import TOOL_CAPABLE_MODELS  # noqa: E402
-from backend.config import FLUSH_WAIT_SECONDS, GENERATE_TIMEOUT, LLM_BACKEND, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, _ollama_httpx, _ollama_session  # noqa: E402
+from backend.config import FLUSH_WAIT_SECONDS, GENERATE_TIMEOUT, KEEP_ALIVE_DEFAULT, LLM_BACKEND, NUM_CTX_DEFAULT, NUM_PREDICT_DEFAULT, OLLAMA_BASE_URL, _ollama_httpx, _ollama_session, native_tools_enabled  # noqa: E402
 from backend.agents import _chat_base  # noqa: E402
 from backend.runstate import AbortRequested  # noqa: E402  (abortos en stream_llm)
 import backend.settings as _otter_settings  # noqa: E402
@@ -167,11 +201,107 @@ def invalidate_models_cache() -> None:
     """Invalida la caché de modelos (tras pull/create/delete/copy)."""
     global _models_cache
     _models_cache = None
+    try:
+        from backend.model_probe import invalidate_probe
+        invalidate_probe()
+    except Exception:
+        pass
+
+
+_VISION_MARKERS = (
+    "llava", "llama3.2-vision", "llama3.2-vision", "qwen2-vl", "qwen2.5vl",
+    "qwen2.5-vl", "gemma3", "minicpm-v", "minicpmv", "moondream", "granite-vision",
+    "vision",
+)
+
+
+def model_supports_vision(model: str, show: Optional[Dict[str, Any]] = None) -> bool:
+    from backend.model_probe import get_model_vision
+    if get_model_vision(model, show if isinstance(show, dict) else None):
+        return True
+    name = (model or "").lower()
+    return any(m in name for m in _VISION_MARKERS)
+
+
+def parse_context_length(show: Dict[str, Any]) -> int:
+    from backend.model_probe import get_model_context
+    n = get_model_context("", show if isinstance(show, dict) else {})
+    return int(n or 0)
+
+
+def strip_image_b64(raw: str) -> str:
+    s = (raw or "").strip()
+    if "," in s and s.lower().startswith("data:"):
+        s = s.split(",", 1)[1]
+    return re.sub(r"\\s+", "", s)
+
+
+def _with_images(messages: List[Dict[str, Any]], images: List[str]) -> List[Dict[str, Any]]:
+    if not images:
+        return messages
+    out = [dict(m) for m in messages]
+    for m in reversed(out):
+        if (m.get("role") or "") == "user":
+            m["images"] = images
+            break
+    else:
+        out.append({"role": "user", "content": "(imagen)", "images": images})
+    return out
+
+
+def resolve_coder_model(requested: str = "") -> str:
+    """Si el modelo pedido no está en /api/tags, usa DEFAULT_MODEL o el primero."""
+    want = (requested or DEFAULT_MODEL or "").strip()
+    tags = fetch_models() or []
+    if want and want in tags:
+        return want
+    if want:
+        base = want.split(":")[0]
+        for t in tags:
+            if t == want or t.startswith(base):
+                return t
+    if DEFAULT_MODEL in tags:
+        return DEFAULT_MODEL
+    return tags[0] if tags else want or DEFAULT_MODEL
 
 
 # ---------------------------------------------------------------------------
 # Errores amigables + stream de Ollama
 # ---------------------------------------------------------------------------
+
+class TruncatedToolCall(RuntimeError):
+    """llama-server cortó el JSON de arguments de un tool_call nativo."""
+
+    def __init__(self, tool: str, detail: str = ""):
+        self.tool = tool or "tool"
+        super().__init__(detail or f"JSON truncado en {self.tool}")
+
+
+def _truncated_tool_name(err: str) -> Optional[str]:
+    e = err or ""
+    m = re.search(r'invalid tool call arguments for "([^"]+)"', e, re.I)
+    if m:
+        return m.group(1)
+    low = e.lower()
+    if "unexpected end of json" in low and "tool call" in low:
+        return "write_file"
+    return None
+
+
+class ContextOverflow(RuntimeError):
+    """Ollama rechazó la llamada por ventana de contexto llena."""
+
+
+def _is_context_overflow(text: str) -> bool:
+    t = (text or "").lower()
+    return any(k in t for k in (
+        "context length", "context window", "too many tokens",
+        "n_keep", "exceeds context", "maximum context",
+        "prompt is too long", "num_ctx",
+        "exceed_context", "available context", "n_prompt_tokens",
+        "n_ctx", "context size",
+    ))
+
 
 def _friendly_ollama_error(exc: Exception) -> str:
     msg = str(exc)
@@ -186,6 +316,12 @@ def _friendly_ollama_error(exc: Exception) -> str:
             "Ollama tardó demasiado en responder. El modelo puede estar cargando a "
             "VRAM por primera vez; reintenta la misión."
         )
+    low = msg.lower()
+    if "out of memory" in low or ("cuda" in low and "memory" in low) or "vram" in low:
+        return (
+            "La GPU se ha quedado sin VRAM. Prueba un modelo más pequeño o "
+            "reduce num_ctx (Ajustes)."
+        )
     return msg
 
 
@@ -193,6 +329,94 @@ def _with_model_hint(detail: str, model: str) -> str:
     if "not found" in detail.lower():
         return f"{detail} → solución: `ollama pull {model}`"
     return detail
+
+
+def ensure_gpu_exclusive(keep_model: str) -> None:
+    """Deja SOLO `keep_model` en VRAM. El resto (router, residuos) a keep_alive 0.
+
+    Dos modelos a la vez en 8 GB empujan capas a CPU/RAM. El usuario pide GPU
+    siempre: un ocupante, todas las capas en GPU (num_gpu=99 en options).
+    """
+    if LLM_BACKEND != "ollama" or not keep_model:
+        return
+    try:
+        ps = _ollama_httpx.get("/api/ps", timeout=5).json()
+        loaded = [
+            str(m.get("name", "")).strip()
+            for m in (ps.get("models") or [])
+            if isinstance(m, dict) and m.get("name")
+        ]
+    except Exception:
+        return
+    for name in loaded:
+        if not name or name == keep_model:
+            continue
+        try:
+            _ollama_session.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={"model": name, "keep_alive": 0, "prompt": "", "stream": False},
+                timeout=30,
+            )
+        except requests.RequestException:
+            pass
+
+
+LAST_GENERATE_TIMEOUT: Tuple[int, int] = GENERATE_TIMEOUT
+
+
+def _host_is_local(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        host = ""
+    if not host or host in ("localhost", "127.0.0.1", "::1"):
+        return True
+    if "." not in host:
+        return True
+    if host.startswith("10.") or host.startswith("192.168."):
+        return True
+    if host.startswith("172."):
+        try:
+            second = int(host.split(".")[1])
+            if 16 <= second <= 31:
+                return True
+        except (IndexError, ValueError):
+            pass
+    return False
+
+
+def tool_arg_deltas(prev: str, args: str) -> Tuple[str, str]:
+    """Devuelve (nuevo_prev, delta) para streamear arguments de tool_calls."""
+    prev = prev or ""
+    args = args or ""
+    if args.startswith(prev) and len(args) > len(prev):
+        return args, args[len(prev):]
+    if args and args != prev:
+        return args, ""
+    return prev, ""
+
+
+def _keep_partial(run: Any, collected: List[str]) -> None:
+    """Conserva tokens ya emitidos si el stream muere a mitad."""
+    if not collected:
+        return
+    try:
+        run._partial_text = "".join(collected)
+    except AttributeError:
+        pass
+
+
+def generate_timeout_for(url: str = "") -> Tuple[int, int]:
+    """Timeout efectivo de la petición LLM (leíble en LAST_GENERATE_TIMEOUT)."""
+    global LAST_GENERATE_TIMEOUT
+    base = url or OLLAMA_BASE_URL
+    if _host_is_local(base):
+        read = int(os.environ.get("OTTERCODE_OLLAMA_READ_TIMEOUT", "1200") or "1200")
+        LAST_GENERATE_TIMEOUT = (15, max(900, read))
+    else:
+        LAST_GENERATE_TIMEOUT = GENERATE_TIMEOUT
+    return LAST_GENERATE_TIMEOUT
 
 
 def stream_llm(
@@ -213,16 +437,21 @@ def stream_llm(
     attempt = 0
     while True:
         attempt += 1
+        try:
+            ensure_gpu_exclusive(getattr(run, "model", "") or "")
+        except Exception:
+            pass
         # v6.0 · el transporte puede conmutarse a mitad de misión (fallback)
-        url, payload = _llm_request(run, system_prompt, prompt)
+        url, payload = _llm_request(run, system_prompt, prompt, agent_id=agent_id)
         _is_chat = "/api/chat" in url
         collected: List[str] = []
         stats: Dict[str, Any] = {}
         emitted = False
         _chat_tool_calls: List[Any] = []
+        _arg_seen: Dict[int, str] = {}
         try:
             with _ollama_session.post(
-                url, json=payload, stream=True, timeout=GENERATE_TIMEOUT,
+                url, json=payload, stream=True, timeout=generate_timeout_for(url),
             ) as resp:
                 # Abort agresivo: api_abort cierra este socket y el stream muere
                 # al instante (antes el abort esperaba al timeout de 300 s).
@@ -242,6 +471,13 @@ def stream_llm(
                                     "cambiando a /api/generate (compatibilidad)."
                         })
                         continue
+                    if _is_context_overflow(_detail):
+                        raise ContextOverflow(_detail)
+                    trunc = _truncated_tool_name(_detail)
+                    if trunc:
+                        stats["_truncated_tool"] = trunc
+                        stats["_truncated_err"] = _detail[:400]
+                        return "".join(collected), stats
                     raise RuntimeError(
                         _with_model_hint(
                             f"El modelo devolvió HTTP {resp.status_code}: {_detail}",
@@ -272,6 +508,7 @@ def stream_llm(
                         except json.JSONDecodeError:
                             continue
                         if chunk.get("error"):
+                            _keep_partial(run, collected)
                             raise RuntimeError(
                                 _with_model_hint(f"Modelo: {chunk['error']}", run.model))
                         choices = chunk.get("choices") or [{}]
@@ -279,14 +516,23 @@ def stream_llm(
                         if token:
                             collected.append(token)
                             emitted = True
-                            yield sse(SseEvent.token, {"agent": agent_id, "token": token})
+                            yield sse(SseEvent.token, {"agent": agent_id, "token": redact_text(token)})
                         continue
                     try:
                         data = json.loads(text_line)
                     except json.JSONDecodeError:
                         continue
                     if data.get("error"):
-                        raise RuntimeError(_with_model_hint(f"Ollama: {data['error']}", run.model))
+                        err = str(data["error"])
+                        if _is_context_overflow(err):
+                            raise ContextOverflow(err)
+                        trunc = _truncated_tool_name(err)
+                        if trunc:
+                            stats["_truncated_tool"] = trunc
+                            stats["_truncated_err"] = err[:400]
+                            break
+                        _keep_partial(run, collected)
+                        raise RuntimeError(_with_model_hint(f"Ollama: {err}", run.model))
                     if data.get("done"):
                         stats = {
                             "tokens": data.get("eval_count"),
@@ -307,12 +553,37 @@ def stream_llm(
                     msg = data.get("message") or {}
                     if _is_chat and msg.get("tool_calls"):
                         _chat_tool_calls.extend(msg["tool_calls"])
+                        for i, tc in enumerate(msg["tool_calls"]):
+                            if not isinstance(tc, dict):
+                                continue
+                            fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                            name = str((fn or {}).get("name") or "tool")
+                            raw_args = (fn or {}).get("arguments")
+                            if isinstance(raw_args, dict):
+                                args = json.dumps(raw_args, ensure_ascii=False)
+                            else:
+                                args = str(raw_args or "")
+                            prev = _arg_seen.get(i, "")
+                            nxt, delta = tool_arg_deltas(prev, args)
+                            _arg_seen[i] = nxt
+                            if delta:
+                                if not prev:
+                                    yield sse(SseEvent.tool_call, {
+                                        "id": f"draft-{agent_id}-{i}",
+                                        "tool": name,
+                                        "title": name,
+                                    })
+                                yield sse(SseEvent.token, {
+                                    "agent": agent_id,
+                                    "token": redact_text(delta),
+                                    "tool": name,
+                                })
                         continue
                     token = msg.get("content", "") if _is_chat else data.get("response", "")
                     if token:
                         collected.append(token)
                         emitted = True
-                        yield sse(SseEvent.token, {"agent": agent_id, "token": token})
+                        yield sse(SseEvent.token, {"agent": agent_id, "token": redact_text(token)})
             if getattr(run, "_active_resp", None) is resp:
                 run._active_resp = None
             return "".join(collected), stats
@@ -327,6 +598,7 @@ def stream_llm(
                 except AttributeError:
                     pass
                 raise AbortRequested()
+            _keep_partial(run, collected)
             raise RuntimeError(_friendly_ollama_error(exc))
         except (requests.ConnectionError, requests.ConnectTimeout,
                 requests.ReadTimeout) as exc:
@@ -337,18 +609,21 @@ def stream_llm(
                 except AttributeError:
                     pass
                 raise AbortRequested()
-            if emitted or attempt > 2:
+            max_tries = int(os.environ.get("OTTERCODE_OLLAMA_RETRIES", "3"))
+            if emitted or attempt >= max_tries:
+                _keep_partial(run, collected)
                 raise RuntimeError(_friendly_ollama_error(exc))
-            # v4.8 · hasta 3 intentos sin primer token: el swap de modelos en
-            # Ollama (otro modelo residente) + prefill puede rozar los 420 s.
+            wait = min(32, 2 ** attempt)
+            print(f"[ottercode] Ollama retry {attempt}/{max_tries} wait={wait}s: {exc}",
+                  flush=True)
             yield sse(SseEvent.system, {
-                "text": f"⏳ Ollama está cargando/ocupado (intento {attempt}/3); "
-                        f"reintentando en 3 s…"
+                "text": f"⏳ Ollama caída/timeout (intento {attempt}/{max_tries}); "
+                        f"reintento en {wait}s…"
             })
-            time.sleep(3)
+            time.sleep(wait)
 
 
-def _llm_request(run: Any, system_prompt: str, prompt: str) -> Tuple[str, Dict[str, Any]]:
+def _llm_request(run: Any, system_prompt: str, prompt: str, agent_id: str = "") -> Tuple[str, Dict[str, Any]]:
     """(url, payload) según el transporte configurado.
 
     v6.0 · Fase 1: transporte primario /api/chat con messages[] por roles
@@ -357,26 +632,36 @@ def _llm_request(run: Any, system_prompt: str, prompt: str) -> Tuple[str, Dict[s
     Envía SIEMPRE options (num_ctx/num_predict) y keep_alive.
     """
     num_ctx = getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT
-    keep = os.environ.get("OTTERCODE_KEEP_ALIVE", "15m")
+    keep = os.environ.get("OTTERCODE_KEEP_ALIVE", KEEP_ALIVE_DEFAULT)
     transport = getattr(run, "_transport", "chat")
     # FASE 3 · resolver temperature/top_p del run (viene del perfil)
-    _temp = getattr(run, "temperature", None) or 0.7
+    _temp = getattr(run, "temperature", None)
+    if _temp is None:
+        _temp = 0.2
     _top = getattr(run, "top_p", None) or 0.9
+    _want_tools = native_tools_enabled(getattr(run, "model", "") or "") and agent_id != "reviewer"
+    _allowed = getattr(run, "_native_allowed", None)
+    _tools = tools.get_ollama_tools(_allowed) if _want_tools else None
     if LLM_BACKEND == "openai" or transport == "openai":
-        return (
-            f"{_chat_base()}/chat/completions",
-            {
-                "model": run.model,
-                "stream": True,
-                "max_tokens": NUM_PREDICT_DEFAULT,
-                "temperature": _temp,
-                "top_p": _top,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-            },
-        )
+        _oa_msgs: List[Dict[str, str]] = []
+        if system_prompt:
+            _oa_msgs.append({"role": "system", "content": system_prompt})
+        _hist = getattr(run, "messages", None)
+        if _hist:
+            _oa_msgs.extend(list(_hist))
+        else:
+            _oa_msgs.append({"role": "user", "content": prompt})
+        oa = {
+            "model": run.model,
+            "stream": True,
+            "max_tokens": NUM_PREDICT_DEFAULT,
+            "temperature": _temp,
+            "top_p": _top,
+            "messages": _oa_msgs,
+        }
+        if _tools:
+            oa["tools"] = _tools
+        return (f"{_chat_base()}/chat/completions", oa)
     if transport == "generate":
         _prompt = _flatten_messages(getattr(run, "messages", None)) or prompt
         return (
@@ -388,26 +673,26 @@ def _llm_request(run: Any, system_prompt: str, prompt: str) -> Tuple[str, Dict[s
                 "options": _otter_settings.build_options(run),
             },
         )
-    _messages: List[Dict[str, str]] = []
+    _messages: List[Dict[str, Any]] = []
     if system_prompt:
         _messages.append({"role": "system", "content": system_prompt})
     _hist = getattr(run, "messages", None)
     if _hist:
-        _messages.extend(_hist)
+        _messages.extend(list(_hist))
     else:
         _messages.append({"role": "user", "content": prompt})
-    # FASE 5 · Native Function Calling: enviar tools solo si el modelo es capaz
-    _tools = tools.get_ollama_tools() if any(m in run.model for m in TOOL_CAPABLE_MODELS) else None
-    
-    return (
-        f"{OLLAMA_BASE_URL}/api/chat",
-        {
-            "model": run.model, "messages": _messages, "stream": True,
-            "keep_alive": keep,
-            "tools": _tools,
-            "options": _otter_settings.build_options(run),
-        },
-    )
+    raw_imgs = list(getattr(run, "_images", None) or [])[:4]
+    imgs = [strip_image_b64(x) for x in raw_imgs if str(x).strip()]
+    if imgs:
+        _messages = _with_images(_messages, imgs)
+    payload = {
+        "model": run.model, "messages": _messages, "stream": True,
+        "keep_alive": keep,
+        "options": _otter_settings.build_options(run),
+    }
+    if _tools:
+        payload["tools"] = _tools
+    return (f"{OLLAMA_BASE_URL}/api/chat", payload)
 
 
 def _estimate_tokens(text: str) -> int:

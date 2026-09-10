@@ -5,11 +5,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Square, Sliders, Paperclip, RotateCcw, Skull, Clock, X } from 'lucide-react'
 import { useUi } from '../store'
-import { api, type AgentInfo } from '../api'
+import { api, fetchWithAuth, type AgentInfo, type Profile } from '../api'
 import { F, SLASH_COMMANDS } from '../features'
 import SlashPopup from '../SlashPopup'
 
-const DEFAULT_AGENTS = ['architect', 'researcher', 'developer', 'reviewer']
+const DEFAULT_AGENTS = ['agent', 'architect', 'researcher', 'developer', 'reviewer']
 
 export default function ChatInputBar({
   onLaunch,
@@ -28,39 +28,72 @@ export default function ChatInputBar({
   const setMaxRounds = useUi((s) => s.setMaxRounds)
   const hacker = useUi((s) => s.hacker)
   const setHacker = useUi((s) => s.setHacker)
+  const yolo = useUi((s) => s.yolo)
+  const setYolo = useUi((s) => s.setYolo)
   const missionQueue = useUi((s) => s.missionQueue)
   const enqueueMission = useUi((s) => s.enqueueMission)
   const dequeueMission = useUi((s) => s.dequeueMission)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [task, setTask] = useState('')
-  const [mode, setMode] = useState<'chat' | 'chain'>('chat')
-  const [startAgent, setStartAgent] = useState('agent')
+  const mode = useUi((s) => s.agentMode)
+  const setMode = useUi((s) => s.setAgentMode)
+  const startAgent = useUi((s) => s.startAgent)
+  const setStartAgent = useUi((s) => s.setStartAgent)
   const [goal, setGoal] = useState('')
   const [planOnly, setPlanOnly] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [sel, setSel] = useState(0)
   const [agentsList, setAgentsList] = useState<AgentInfo[]>([])
+  const [attach, setAttach] = useState<{ name: string; preview?: string }[]>([])
+  const [dragOver, setDragOver] = useState(false)
+  const [visionOk, setVisionOk] = useState(true)
+  const [health, setHealth] = useState('online')
+  const [profiles, setProfiles] = useState<Profile[]>([])
+  const [activeProf, setActiveProf] = useState('')
+  const model = useUi((s) => s.model)
+
+  const ingestFiles = (list: File[]) => {
+    const MAX_IMG = 1_000_000
+    const MAX_TXT = 80_000
+    for (const file of list) {
+      if (file.type.startsWith('image/')) {
+        if (file.size > MAX_IMG) {
+          useUi.getState().setNotice(`Imagen demasiado grande (${file.name}, máx. 1 MB)`)
+          continue
+        }
+        const reader = new FileReader()
+        reader.onload = (event) => {
+          const data = String(event.target?.result || '')
+          setAttach((a) => [...a, { name: file.name, preview: data }])
+          setTask((prev) => prev + `\n[Imagen adjunta: ${file.name}]\n`)
+        }
+        reader.readAsDataURL(file)
+      } else {
+        if (file.size > MAX_TXT) {
+          useUi.getState().setNotice(`Archivo demasiado grande (${file.name}, máx. 80 KB de texto)`)
+          continue
+        }
+        const reader = new FileReader()
+        reader.onload = (event) => {
+          let content = String(event.target?.result || '')
+          if (content.length > MAX_TXT) content = content.slice(0, MAX_TXT) + '\n… (truncado)'
+          setAttach((a) => [...a, { name: file.name }])
+          setTask((prev) => prev + `\n[Archivo: ${file.name}]\n\`\`\`\n${content}\n\`\`\`\n`)
+        }
+        reader.readAsText(file)
+      }
+    }
+  }
 
   const changeMode = (m: 'chat' | 'chain') => {
     setMode(m)
-    // D · En cadena, el Arquitecto empieza planeando y delega; en agente único,
-    // el especializado en todo (Otter).
-    if (m === 'chain') setStartAgent('architect')
-    else setStartAgent('agent')
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const content = event.target?.result as string
-      const fileBlock = `\n[Archivo: ${file.name}]\n\`\`\`\n${content}\n\`\`\`\n`
-      setTask((prev) => prev + fileBlock)
-    }
-    reader.readAsText(file)
+    const files = e.target.files ? Array.from(e.target.files) : []
+    if (files.length) ingestFiles(files)
+    e.target.value = ''
   }
 
   useEffect(() => {
@@ -71,6 +104,38 @@ export default function ChatInputBar({
         }
       })
       .catch(() => undefined)
+    api.profiles()
+      .then((r) => {
+        setProfiles(r.profiles || [])
+        setActiveProf(r.active || '')
+      })
+      .catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    if (!model) return
+    fetchWithAuth('/api/model/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    }).then((r) => r.json()).then((info) => {
+      setVisionOk(Boolean(info.vision) || /llava|qwen2.5vl|gemma3|vision|moondream|minicpm-v/i.test(model))
+      if (info.vram_warn) useUi.getState().setNotice(String(info.vram_warn))
+    }).catch(() => setVisionOk(/llava|qwen2.5vl|gemma3|vision|moondream|minicpm-v/i.test(model)))
+  }, [model])
+
+  useEffect(() => {
+    let on = true
+    const tick = () => {
+      api.pulse().then((p) => {
+        if (!on) return
+        const h = (p as { ollama_health?: string }).ollama_health
+        setHealth(h || (p.ok ? 'online' : 'down'))
+      }).catch(() => { if (on) setHealth('down') })
+    }
+    tick()
+    const id = window.setInterval(tick, 5000)
+    return () => { on = false; window.clearInterval(id) }
   }, [])
 
   useEffect(() => {
@@ -120,8 +185,8 @@ export default function ChatInputBar({
 
     const parsed = trimmed.startsWith('/') ? F.parseInput(trimmed) : { fields: { task: trimmed } }
 
-    // Si el modelo está ocupado pensando o escribiendo, añadir a la cola
-    if (streaming) {
+    // Hermes: enviar mientras genera = interrumpir y redirigir (cola + abort).
+    if (streaming && !parsed.action) {
       const payload = {
         ...parsed.fields,
         mode,
@@ -130,15 +195,112 @@ export default function ChatInputBar({
         loop_mode: loopMode,
         max_rounds: loopMode ? maxRounds : undefined,
         hacker,
+        yolo: yolo || Boolean(parsed.fields.yolo),
       }
       enqueueMission(trimmed, payload)
+      onStop()
       setTask('')
+      setAttach([])
       return
     }
 
-    // Ejecución de comandos del sistema
-    if (parsed.action === '/reset') {
-      useUi.getState().clearMission()
+    const st = useUi.getState()
+    if (parsed.action === '/reset' || parsed.action === '/new') {
+      st.clearMission()
+      setTask('')
+      return
+    }
+    if (parsed.action === '/stop') {
+      st.stopMission(true)
+      setTask('')
+      return
+    }
+    if (parsed.action === '/retry') {
+      setTask('')
+      onLaunch({ task: 'continuar desde el último checkpoint', continue_task: st.taskId || undefined, force: true })
+      return
+    }
+    if (parsed.action === '/undo') {
+      const id = st.taskId
+      setTask('')
+      if (!id) { st.setNotice('No hay misión para deshacer'); return }
+      void api.missionUndo(id).then(() => st.setNotice('Cambios deshechos')).catch((e: Error) => st.setNotice(e.message))
+      return
+    }
+    if (parsed.action === '/compress') {
+      const id = st.taskId
+      setTask('')
+      if (!id) { st.setNotice('No hay misión para compactar'); return }
+      void api.compactNow(id).then((r) => st.setNotice(r.ok ? 'Contexto compactado' : 'No se pudo compactar')).catch((e: Error) => st.setNotice(e.message))
+      return
+    }
+    if (parsed.action === '/focus') {
+      st.toggleFocus()
+      setTask('')
+      return
+    }
+    if (parsed.action === '/save') {
+      setTask('')
+      st.setNotice('Usa Ctrl+K → exportar, o descarga el ZIP al terminar')
+      return
+    }
+    if (parsed.action === '/help') {
+      const help = SLASH_COMMANDS.map((c) => `${c.cmd} — ${c.desc}`).join('\n')
+      useUi.setState((s) => ({
+        mission: [
+          ...s.mission,
+          { id: Date.now(), at: Date.now(), name: 'system', data: { text: 'Comandos:\n' + help } },
+        ],
+      }))
+      setTask('')
+      return
+    }
+    if (parsed.action === '/project') {
+      const path = String(parsed.fields.project_path || '').trim()
+      if (path) {
+        api.setProject(path).then(() => useUi.getState().setNotice(`Proyecto: ${path}`)).catch((e: Error) => useUi.getState().setNotice(e.message))
+      }
+      setTask('')
+      return
+    }
+    if (parsed.action === '/cron') {
+      const arg = String(parsed.fields.cron || '').trim()
+      const [a, ...rest] = arg.split(/\s+/)
+      const id = rest.join(' ')
+      const body: Record<string, unknown> = { action: a || 'list', id, name: id }
+      void fetchWithAuth('/api/cron', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then((r) => r.json()).then((j) => useUi.getState().setNotice(JSON.stringify(j).slice(0, 180)))
+        .catch((e: Error) => useUi.getState().setNotice(e.message))
+      setTask('')
+      return
+    }
+    if (parsed.action === '/skills') {
+      const arg = String(parsed.fields.skills_cmd || '').trim()
+      void fetchWithAuth('/api/skills').then((r) => r.json()).then((j) => useUi.getState().setNotice('skills: ' + ((j.skills || []).length)))
+        .catch((e: Error) => useUi.getState().setNotice(e.message))
+      setTask('')
+      return
+    }
+    if (parsed.action === '/memory') {
+      const arg = String(parsed.fields.memory_cmd || '').trim()
+      if (arg.startsWith('approve ')) {
+        const pid = arg.slice(8).trim()
+        void fetchWithAuth(`/api/memory/approve/${encodeURIComponent(pid)}`, { method: 'POST' })
+          .then((r) => r.json()).then((j) => useUi.getState().setNotice(j.ok ? 'memoria aprobada' : String(j.error)))
+      } else {
+        void fetchWithAuth('/api/memory/status').then((r) => r.json()).then((j) => useUi.getState().setNotice('memory provider: ' + (j.provider || 'builtin')))
+      }
+      setTask('')
+      return
+    }
+    if (parsed.action === '/sessions') {
+      void api.history().then((r) => useUi.getState().setNotice(`${r.sessions.length} sesiones`)).catch((e: Error) => useUi.getState().setNotice(e.message))
+      setTask('')
+      return
+    }
+    if (parsed.action === '/journey') {
+      useUi.getState().setView('identidad')
+      useUi.getState().setNotice('Journey: pestaña Agentes / grafo')
       setTask('')
       return
     }
@@ -161,22 +323,67 @@ export default function ChatInputBar({
     const fields: Record<string, unknown> = { ...parsed.fields }
     if (!fields.start_agent) fields.start_agent = startAgent
 
-    onLaunch({
-      ...fields,
-      mode: effMode,
-      goal: effGoal,
-      plan_only: planOnly || Boolean(parsed.fields.plan_only),
-      loop_mode: loopMode,
-      max_rounds: loopMode ? maxRounds : undefined,
-      hacker,
-    })
+    const images = attach.map((a) => a.preview).filter(Boolean).slice(0, 4)
+    if (images.length && !visionOk) {
+      useUi.getState().setNotice('Este modelo no declara visión: las imágenes pueden ignorarse.')
+    }
+    try {
+      onLaunch({
+        ...fields,
+        mode: effMode,
+        continue_task: st.taskId || undefined,
+        goal: effGoal,
+        plan_only: planOnly || Boolean(parsed.fields.plan_only),
+        loop_mode: loopMode,
+        max_rounds: loopMode ? maxRounds : undefined,
+        hacker,
+        yolo: yolo || Boolean(parsed.fields.yolo),
+        images,
+        profile: activeProf || undefined,
+      })
+    } catch (e) {
+      useUi.getState().setNotice((e as Error).message || 'No se pudo enviar')
+    }
     setTask('')
+    setAttach([])
   }
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pb-3">
       {/* Contenedor flotante estilo OpenWebUI */}
-      <div className="relative rounded-2xl border border-line bg-surface/90 p-3 shadow-sm backdrop-blur transition-all focus-within:border-accent/40 focus-within:shadow-md">
+      <div
+        className={`relative rounded-2xl border bg-surface/90 p-3 shadow-sm backdrop-blur transition-all focus-within:border-accent/40 focus-within:shadow-md ${dragOver ? 'border-accent' : 'border-line'}`}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDragOver(false)
+          ingestFiles(Array.from(e.dataTransfer.files || []))
+        }}
+      >
+        {attach.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {attach.map((a) => (
+              <span key={a.name} className="flex items-center gap-1 rounded-lg border border-line bg-panel px-2 py-1 text-[11px]">
+                {a.preview && <img src={a.preview} alt="" className="h-8 w-8 rounded object-cover" />}
+                {a.name}
+              </span>
+            ))}
+            {!visionOk && attach.some((a) => a.preview) && (
+              <button
+                type="button"
+                className="rounded-lg border border-line px-2 py-1 text-[11px] text-accent"
+                onClick={() => {
+                  const first = attach.find((a) => a.preview)
+                  useUi.getState().setNotice('Alternativa: tool image_describe sobre el workspace (guarda la imagen en la misión).')
+                  if (first) setTask((t) => t + `\nUsa image_describe sobre ${first.name}\n`)
+                }}
+              >
+                Usar image_describe
+              </button>
+            )}
+          </div>
+        )}
         {/* Autocomplete de slash commands */}
         {popupOpen && (
           <SlashPopup word={word} selected={sel} onPick={pickCommand} />
@@ -198,6 +405,7 @@ export default function ChatInputBar({
                   <span className="truncate font-medium text-muted">{item.text}</span>
                   <button
                     type="button"
+                    aria-label="Quitar de la cola"
                     onClick={() => dequeueMission(item.id)}
                     className="rounded p-0.5 text-muted hover:text-danger hover:bg-canvas transition-colors"
                     title="Quitar de la cola"
@@ -213,7 +421,26 @@ export default function ChatInputBar({
 
         {/* Barra superior de ajustes rápidos */}
         <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-          {/* Selector de modo explícito */}
+          <span
+            className={`h-2 w-2 shrink-0 rounded-full ${health === 'online' ? 'bg-accent' : health === 'loading' ? 'bg-muted' : 'bg-danger'}`}
+            title={health === 'online' ? 'Ollama en línea' : health === 'loading' ? 'Cargando modelo' : 'Ollama caído'}
+          />
+          {profiles.length > 0 && (
+            <select
+              aria-label="Perfil"
+              value={activeProf}
+              onChange={(e) => {
+                const n = e.target.value
+                setActiveProf(n)
+                void api.setActiveProfile(n).catch((err: Error) => useUi.getState().setNotice(err.message))
+              }}
+              className="cursor-pointer rounded-lg border border-line bg-panel2 px-2 py-1 text-[10px] font-semibold text-ink focus:outline-none"
+            >
+              {profiles.map((pr) => (
+                <option key={pr.name} value={pr.name}>{pr.display_name || pr.name}</option>
+              ))}
+            </select>
+          )}
           <select
             id="modeSel2"
             aria-label="Modo de agente"
@@ -234,7 +461,7 @@ export default function ChatInputBar({
             title="Bucle programador↔revisor hasta aprobar (o límite)"
           >
             <RotateCcw className="h-3 w-3" />
-            Loop
+            Bucle
           </button>
           {loopMode && (
             <input
@@ -248,18 +475,6 @@ export default function ChatInputBar({
               title="Rondas máximas del bucle"
             />
           )}
-          <button
-            id="hackerBtn"
-            type="button"
-            onClick={() => setHacker(!hacker)}
-            className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-semibold border transition-colors ${
-              hacker ? 'bg-danger text-white border-danger' : 'bg-panel2 text-ink2 border-line2 hover:text-ink'
-            }`}
-            title="Modo hacker: LLM sin censura de contenido (la protección del sistema sigue intacta)"
-          >
-            <Skull className="h-3 w-3" />
-            Hacker
-          </button>
           <button
             id="planBtn"
             type="button"
@@ -283,10 +498,33 @@ export default function ChatInputBar({
         {/* Panel expandible de opciones avanzadas */}
         {showSettings && (
           <div className="mb-2 grid gap-2 rounded-xl border border-line bg-panel2 p-3 text-xs sm:grid-cols-2">
+            <div className="sm:col-span-2 flex flex-wrap gap-2">
+              <button
+                id="hackerBtn"
+                type="button"
+                onClick={() => setHacker(!hacker)}
+                className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-semibold border ${
+                  hacker ? 'bg-danger text-white border-danger' : 'bg-canvas text-ink2 border-line2'
+                }`}
+              >
+                <Skull className="h-3 w-3" />
+                Sin censura
+              </button>
+              <button
+                id="yoloBtn"
+                type="button"
+                onClick={() => setYolo(!yolo)}
+                className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-semibold border ${
+                  yolo ? 'bg-accent text-accentink border-accent' : 'bg-canvas text-ink2 border-line2'
+                }`}
+              >
+                Sin confirmar herramientas
+              </button>
+            </div>
             {hacker && (
               <div className="sm:col-span-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-[11px] text-danger">
-                Modo hacker activo: el LLM responde sin censura de contenido. La
-                protección del sistema (denylist de bash, guard SSRF) sigue intacta.
+                Sin censura: el modelo responde sin filtro de contenido. La
+                protección del sistema (denylist de bash, guardia SSRF) sigue activa.
               </div>
             )}
             <div>
@@ -308,15 +546,12 @@ export default function ChatInputBar({
                 value={startAgent}
                 onChange={(e) => setStartAgent(e.target.value)}
               >
-                {agentsList.length > 0
-                  ? agentsList.map((a) => (
+                {(agentsList.length > 0
+                  ? agentsList
+                  : DEFAULT_AGENTS.map((id) => ({ id, icon: '', nombre: id }))
+                ).map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.icon} {a.nombre}
-                      </option>
-                    ))
-                  : DEFAULT_AGENTS.map((a) => (
-                      <option key={a} value={a}>
-                        {a}
                       </option>
                     ))}
               </select>
@@ -333,7 +568,7 @@ export default function ChatInputBar({
 
         {/* Textarea auto-ajustable con Enter para enviar */}
         <div className="flex items-end gap-2">
-          <button type="button" onClick={() => fileInputRef.current?.click()} className="mb-2 text-muted hover:text-ink">
+          <button type="button" aria-label="Adjuntar archivo" onClick={() => fileInputRef.current?.click()} className="mb-2 text-muted hover:text-ink">
             <Paperclip className="h-5 w-5" />
           </button>
           <input
@@ -341,17 +576,29 @@ export default function ChatInputBar({
             ref={fileInputRef}
             className="hidden"
             onChange={handleFileChange}
-            accept=".py,.js,.json,.md,.rs,.txt,.css,.html"
+            accept="image/*,.py,.js,.json,.md,.rs,.txt,.css,.html"
           />
           <textarea
+            id="chatInput"
+            autoFocus
             className="max-h-48 min-h-[52px] w-full resize-none bg-transparent px-1 py-1 text-sm text-ink placeholder:text-muted focus:outline-none focus-visible:outline-none"
             rows={2}
             value={task}
             onChange={(e) => {
               setTask(e.target.value)
               setSel(0)
+              const el = e.target
+              el.style.height = 'auto'
+              el.style.height = `${Math.min(192, el.scrollHeight)}px`
             }}
             onKeyDown={onKeyDown}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData?.files || [])
+              if (files.length) {
+                e.preventDefault()
+                ingestFiles(files)
+              }
+            }}
             placeholder="Pregunta o describe la tarea… (escribe / para comandos)"
           />
 
@@ -360,6 +607,7 @@ export default function ChatInputBar({
             {streaming && (
               <button
                 type="button"
+                aria-label="Detener generación"
                 onClick={onStop}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-danger/30 bg-danger/10 text-danger transition-all hover:bg-danger hover:text-white"
                 title="Detener generación actual"
@@ -369,6 +617,7 @@ export default function ChatInputBar({
             )}
             <button
               type="button"
+              aria-label={streaming ? 'Añadir a la cola' : 'Enviar mensaje'}
               onClick={handleSend}
               disabled={!task.trim()}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-accentink shadow-sm transition-all hover:opacity-90 disabled:opacity-30"
@@ -381,7 +630,7 @@ export default function ChatInputBar({
       </div>
 
       <p className="mt-1.5 text-center text-[11px] text-muted">
-        OtterCode con agentes locales · Los modelos pueden cometer errores · Verifica el código generado.
+        Enter envía · Shift+Enter salto · Ctrl+K paleta · Ctrl+N nuevo · Ctrl+. para · / para comandos
       </p>
     </div>
   )

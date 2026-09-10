@@ -1,6 +1,36 @@
 # OtterCode — registro de agentes (núcleo + escuadrón preset + skills config)
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from events import SseEvent, sse, Route
+
+from backend.config import (
+    OLLAMA_BASE_URL, DEFAULT_MODEL, LLM_BACKEND, native_tools_enabled
+)
 from backend.config import LLM_BACKEND, OLLAMA_BASE_URL  # noqa: E402
 
 
@@ -125,24 +155,24 @@ BASE_REVIEWER: str = (
 # v4.3 · MODO CLAUDE CODE: UN agente experto con el bucle de herramientas
 # completo. Sin relevos, sin handoffs gigantes: la arquitectura que de verdad
 # funciona con modelos locales.
+OTTER_TOOLS: List[str] = [
+    "read_file", "write_file", "append_file", "edit_file", "apply_patch", "mkdir",
+    "list_dir", "tree", "grep_search", "glob_files", "execute_bash",
+    "git_status", "git_diff", "git_log", "git_commit",
+    "todo_write", "todo_read", "semantic_search", "index_workspace", "finalizar",
+]
+
 BASE_AGENT: str = (
     "=== AGENTE OTTER — MODO CLAUDE CODE ===\n"
-    "Eres Otter, un agente ingeniero de software senior trabajando DIRECTAMENTE "
-    "con el usuario sobre su workspace. No hay más agentes: tú lo haces todo.\n\n"
-    "FORMA DE TRABAJAR (estilo Claude Code):\n"
-    "1. Antes de editar, LEE: list_dir/tree para orientarte, read_file para ver "
-    "el contenido exacto. Nunca adivines lo que hay en un archivo.\n"
-    "2. Escribe con write_file (archivo nuevo o reescritura completa). Archivos "
-    "de más de ~150 líneas: POR PARTES (1ª con write_file, resto con append_file).\n"
-    "3. Cambios quirúrgicos en archivos existentes: edit_file (old_string exacto).\n"
-    "4. VERIFICA lo que hagas: execute_bash (python3 -m py_compile, node --check, "
-    "tests que existan). Si falla, arréglalo tú.\n"
-    "5. Entre skill y skill tu texto es de UNA línea como máximo. Al terminar: "
-    "finalizar con un resumen breve de lo hecho.\n"
-    "6. Si la petición es ambigua, toma la decisión razonable y EJECUTA. No "
-    "narres planes: haz.\n\n"
-    "REGLA DE HIERRO: el código SOLO viaja dentro del JSON de la skill (escapando "
-    "comillas y saltos). Jamás pegues código en tu texto.\n"
+    "Prioridad absoluta: cumple la petición del usuario al pie de la letra. "
+    "No sustituyas la tarea por un demo ni por una web de nutrias.\n"
+    "Eres Otter, ingeniero de software en el workspace del usuario. estilo Claude Code.\n"
+    "1. LEE antes de editar (read_file / list_dir).\n"
+    "2. Si el archivo YA EXISTE: PROHIBIDO write_file (trunca a 4096 tokens y deja el disco intacto). "
+    "OBLIGATORIO edit_file (old_string EXACTO + new_string) o apply_patch. Varios edit_file por sección.\n"
+    "3. write_file SOLO para archivos NUEVOS y cortos (≤120 líneas). Grandes: write_file 1ª parte + append_file.\n"
+    "4. Tras editar: execute_bash (tests/compile). Una tool por paso. Prohibido volcar HTML en el chat.\n"
+    "5. Al terminar: finalizar con un resumen breve. No digas que escribiste un archivo si la tool falló.\n"
 )
 
 # v4.1 · /goal: objetivo mayor del usuario inyectado en TODOS los agentes
@@ -182,10 +212,21 @@ ULTRAREVIEW_SUFFIX = (
 )
 
 
-def tool_protocol(tool_names: List[str]) -> str:
+def tool_protocol(tool_names: List[str], native: bool = False) -> str:
     """Bloque de instrucción de skills inyectado según el agente."""
     if not tool_names:
         return ""
+    if native:
+        names = ", ".join(tool_names)
+        return (
+            "\n=== TOOLS (function calling nativo) ===\n"
+            "Usa function calling; no emitas JSON de tools en el texto.\n"
+            f"Tools: {names}, finalizar.\n"
+            "1) LEE (read_file/list_dir) antes de editar.\n"
+            "2) Archivo existente: SOLO edit_file/apply_patch. write_file SOLO archivos nuevos cortos.\n"
+            "3) Tras editar, execute_bash para tests/compile.\n"
+            "4) Una tool por paso. Prohibido dump de HTML/código en el chat.\n"
+        )
     lines = [
         "",
         "=== SISTEMA DE SKILLS (OtterCode, estilo Claude Code) ===",
@@ -205,9 +246,10 @@ def tool_protocol(tool_names: List[str]) -> str:
         "REGLAS DE USO DE SKILLS:",
         "- Un SOLO objeto JSON de skill por respuesta.",
         "- Las rutas son RELATIVAS al workspace de la tarea (nunca absolutas).",
-        "- ARCHIVOS GRANDES (>~120 líneas): escríbelos POR PARTES — write_file para "
-        "la 1ª parte (≤150 líneas) y append_file para las siguientes. NUNCA intentes "
-        "meter el archivo entero en una sola llamada ni pegues código fuera del JSON.",
+        "- ARCHIVO EXISTENTE: PROHIBIDO write_file. Usa edit_file con old_string copiado "
+        "literal del disco (read_file primero). Si edit_file falla, reintenta con el snippet.",
+        "- ARCHIVOS NUEVOS GRANDES (>~120 líneas): POR PARTES — write_file 1ª parte (≤150 líneas) "
+        "y append_file. NUNCA el archivo entero en una sola llamada ni código fuera del JSON.",
         "- El JSON debe ser 100% válido: dentro de cadenas, escapa comillas (\\\") y saltos de línea (\\n).",
         "- Tras cada llamada recibirás el RESULTADO por texto: emite la siguiente skill o 'finalizar'.",
         "- Al completar tu objetivo emite: {\"tool\": \"finalizar\", \"arguments\": {\"resumen\": \"...\"}}",
@@ -222,23 +264,9 @@ CORE_AGENTS: Dict[str, Agent] = {
     # el bucle de tools completo.
     "agent": Agent(
         id="agent", nombre="Otter", rol="Agente único · Claude Code · Tools",
-        system_prompt=BASE_AGENT + tool_protocol(
-            ["read_file", "write_file", "append_file", "edit_file", "mkdir",
-             "list_dir", "tree", "grep_search", "glob_files", "execute_bash",
-             "python_exec", "git_status", "git_diff", "git_log", "sqlite_query",
-             "csv_peek", "json_query", "todo_write", "todo_read",
-             "http_request", "web_search", "web_fetch", "sys_info",
-             "hash_text", "base64_code", "uuid_gen", "pypi_info", "npm_search",
-             "ollama_consult", "vault_read", "vault_write", "finalizar"]),
+        system_prompt=BASE_AGENT + tool_protocol(OTTER_TOOLS, native=True),
         icon="🦦", color_neon="#22d3ee",
-        tools_disponibles=[
-            "read_file", "write_file", "append_file", "edit_file", "mkdir",
-            "list_dir", "tree", "grep_search", "glob_files", "execute_bash",
-            "python_exec", "git_status", "git_diff", "git_log", "sqlite_query",
-            "csv_peek", "json_query", "todo_write", "todo_read",
-            "http_request", "web_search", "web_fetch", "sys_info",
-            "hash_text", "base64_code", "uuid_gen", "pypi_info", "npm_search",
-            "ollama_consult", "vault_read", "vault_write", "finalizar"],
+        tools_disponibles=list(OTTER_TOOLS),
     ),
     "architect": Agent(
         id="architect", nombre="El Arquitecto", rol="Agente Principal · Planner",
@@ -249,36 +277,26 @@ CORE_AGENTS: Dict[str, Agent] = {
         id="researcher", nombre="El Investigador", rol="Contexto · Web · Solo lectura",
         system_prompt=BASE_RESEARCHER + tool_protocol([
             "read_file", "list_dir", "tree", "web_search", "web_fetch",
-            "wikipedia_search", "arxiv_search", "github_search", "stack_search",
-            "weather", "http_request", "model_list", "vault_search",
-            "memory_recall", "finalizar"]),
+            "wikipedia_search", "http_request", "vault_search",
+            "memory_recall", "semantic_search", "finalizar"]),
         icon="🔬", color_neon="#8b9cf7",
         tools_disponibles=["read_file", "list_dir", "tree", "web_search", "web_fetch",
-                           "wikipedia_search", "arxiv_search", "github_search",
-                           "stack_search", "weather", "http_request", "model_list",
-                           "vault_search", "memory_recall", "finalizar"],
+                           "wikipedia_search", "http_request",
+                           "vault_search", "memory_recall", "semantic_search", "finalizar"],
         readonly=True,
     ),
     "developer": Agent(
         id="developer", nombre="El Programador", rol="Implementación · Skills",
         system_prompt=BASE_DEVELOPER + tool_protocol(
-            ["read_file", "write_file", "edit_file", "mkdir", "list_dir", "tree",
-             "grep_search", "glob_files", "execute_bash", "python_exec",
-             "git_status", "git_diff", "git_log", "sqlite_query",
-             "csv_peek", "json_query", "todo_write", "todo_read",
-             "pypi_info", "npm_search", "hash_text", "base64_code", "uuid_gen",
-             "sys_info", "http_request", "ollama_consult",
-             "vault_read", "vault_write", "image_describe", "memory_save",
-             "memory_recall", "finalizar"]),
+            ["read_file", "write_file", "append_file", "edit_file", "apply_patch",
+             "mkdir", "list_dir", "tree", "grep_search", "glob_files", "execute_bash",
+             "git_status", "git_diff", "git_log", "git_commit",
+             "todo_write", "todo_read", "semantic_search", "index_workspace", "finalizar"]),
         icon="💻", color_neon="#34d399",
-        tools_disponibles=["read_file", "write_file", "append_file", "edit_file", "mkdir", "list_dir",
-                           "tree", "grep_search", "glob_files", "execute_bash",
-                           "python_exec", "git_status", "git_diff", "git_log",
-                           "sqlite_query", "csv_peek", "json_query", "todo_write",
-                           "todo_read", "pypi_info", "npm_search", "hash_text",
-                           "base64_code", "uuid_gen", "sys_info", "http_request",
-                           "ollama_consult", "vault_read", "vault_write",
-                           "image_describe", "memory_save", "memory_recall",
+        tools_disponibles=["read_file", "write_file", "append_file", "edit_file", "apply_patch",
+                           "mkdir", "list_dir", "tree", "grep_search", "glob_files", "execute_bash",
+                           "git_status", "git_diff", "git_log", "git_commit",
+                           "todo_write", "todo_read", "semantic_search", "index_workspace",
                            "finalizar"],
     ),
     "reviewer": Agent(
@@ -298,6 +316,13 @@ CORE_AGENTS: Dict[str, Agent] = {
 
 # Orden canónico de la cadena core (el Revisor cierra el ciclo de calidad)
 AGENT_ORDER: List[str] = ["architect", "researcher", "developer", "reviewer"]
+
+# Native ON: slim protocol; native OFF: JSON skill catalog for Otter.
+try:
+    _nat = native_tools_enabled(DEFAULT_MODEL)
+except Exception:
+    _nat = False
+CORE_AGENTS["agent"].system_prompt = BASE_AGENT + tool_protocol(OTTER_TOOLS, native=_nat)
 
 # Base prompts core (para regenerar el protocolo según toggles de skills)
 _CORE_BASE_PROMPTS: Dict[str, str] = {
@@ -575,6 +600,4 @@ def normalize_agent_profile(obj: Dict[str, Any], agent_id: str,
 # ---------------------------------------------------------------------------
 # Utilidades SSE
 # ---------------------------------------------------------------------------
-
-
 

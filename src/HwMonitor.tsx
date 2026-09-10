@@ -104,7 +104,7 @@ export default function HwMonitor({
             className={`h-3 w-3 text-muted transition-transform ${min ? 'rotate-180' : ''}`}
           />
         </button>
-        <button type="button" onClick={onClose} className="rounded p-0.5 text-muted hover:text-ink" title="Ocultar monitor">
+        <button type="button" aria-label="Ocultar monitor" onClick={onClose} className="rounded p-0.5 text-muted hover:text-ink" title="Ocultar monitor">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -129,7 +129,10 @@ export default function HwMonitor({
                     {fmtBytes(vram?.used)} / {fmtBytes(vram?.total)}
                   </span>
                 </div>
-                <Meter label="Uso" pct={vramPct} value={`${vramPct.toFixed(0)}%`} />
+                <Meter label="Uso" pct={vramPct} value={`${vramPct.toFixed(0)}%`} tone={vramPct > 92 ? 'red' : vramPct > 80 ? 'amber' : 'accent'} />
+                {vramPct > 92 && (
+                  <p className="mt-1 text-[10px] text-danger">VRAM al límite: Otter bajará num_ctx si se sostiene.</p>
+                )}
                 <div className="mt-2 space-y-1 text-[10px] text-muted">
                   {vram && vram.models.length > 0
                     ? vram.models.map((m) => (

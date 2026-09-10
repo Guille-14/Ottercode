@@ -1,7 +1,38 @@
 # OtterCode — perfiles de configuración (CRUD + activo)
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from events import SseEvent, sse, Route
+
+from backend.config import (
+    DEFAULT_MODEL, WORKSPACE_ROOT, NUM_CTX_DEFAULT
+)
 from backend.config import DEFAULT_MODEL, NUM_CTX_DEFAULT, WORKSPACE_ROOT  # noqa: E402
+import re
 
 
 PROFILES_DIR = WORKSPACE_ROOT / "profiles"
@@ -18,7 +49,7 @@ def _default_profile() -> Dict[str, Any]:
         "name": "default",
         "display_name": "🦦 Otter (Default)",
         "model": DEFAULT_MODEL,
-        "temperature": 0.7,
+        "temperature": 0.2,
         "top_p": 0.9,
         "num_ctx": NUM_CTX_DEFAULT,
         "system_override": "",
@@ -49,10 +80,10 @@ def _ensure_default_profiles() -> None:
         return
     defaults = [
         {"name": "default", "display_name": "🦦 Otter (Default)",
-         "model": DEFAULT_MODEL, "temperature": 0.7, "top_p": 0.9,
+         "model": DEFAULT_MODEL, "temperature": 0.2, "top_p": 0.9,
          "num_ctx": NUM_CTX_DEFAULT, "system_override": ""},
         {"name": "coder", "display_name": "💻 Coder",
-         "model": DEFAULT_MODEL, "temperature": 0.3, "top_p": 0.85,
+         "model": DEFAULT_MODEL, "temperature": 0.2, "top_p": 0.85,
          "num_ctx": NUM_CTX_DEFAULT,
          "system_override": "Eres un programador experto. Escribe código limpio, bien documentado y con buenas prácticas."},
         {"name": "writer", "display_name": "✍️ Writer",
@@ -139,10 +170,45 @@ class ProfileRequest(BaseModel):
     name: str = Field(min_length=1, max_length=50)
     display_name: str = Field(default="", max_length=100)
     model: str = Field(default=DEFAULT_MODEL, max_length=200)
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     top_p: float = Field(default=0.9, ge=0.0, le=1.0)
     num_ctx: int = Field(default=NUM_CTX_DEFAULT, ge=2048, le=131072)
     system_override: str = Field(default="", max_length=10000)
+
+
+def _param_billions(name: str) -> float:
+    m = re.search(r"(\d+(?:\.\d+)?)\s*[bB]\b", name or "")
+    if m:
+        return float(m.group(1))
+    m = re.search(r":(\d+(?:\.\d+)?)b\b", (name or "").lower())
+    if m:
+        return float(m.group(1))
+    return 0.0
+
+
+def suggest_model_for_role(role: str, models: List[str]) -> Dict[str, Any]:
+    """Sugiere modelo según rol; no fuerza la elección."""
+    r = (role or "").lower()
+    complex_role = any(
+        k in r for k in ("program", "desarroll", "review", "revisor", "coder", "architect", "código", "codigo")
+    )
+    simple_role = any(k in r for k in ("resumen", "formato", "format", "summary", "traduc"))
+    ranked = sorted(models or [], key=_param_billions)
+    small = [m for m in ranked if 0 < _param_billions(m) <= 7] or ranked[:1]
+    large = [m for m in ranked if _param_billions(m) >= 7] or (ranked[-1:] if ranked else [])
+    if complex_role:
+        pick = large[-1] if large else (ranked[-1] if ranked else DEFAULT_MODEL)
+        hint = "Rol complejo: conviene un modelo grande (más VRAM)."
+        band = "large"
+    elif simple_role:
+        pick = small[0] if small else (ranked[0] if ranked else DEFAULT_MODEL)
+        hint = "Rol simple: un 3B–7B suele bastar."
+        band = "small"
+    else:
+        pick = ranked[len(ranked) // 2] if ranked else DEFAULT_MODEL
+        hint = "Rol mixto: elige según VRAM libre."
+        band = "mid"
+    return {"suggested": pick, "hint": hint, "band": band, "complex": complex_role}
 
 
 class ActiveProfileRequest(BaseModel):

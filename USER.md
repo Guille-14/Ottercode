@@ -25,7 +25,7 @@ Edita este archivo para que Otter te conozca mejor.
 
 ## Proyectos activos
 
-- OtterCode v2.6.0 — orquestador de agentes local
+- OtterCode v3.0.0 — orquestador de agentes local
 - Interfaz estilo Trade Republic (minimalista, funcional)
 
 ## Restricciones

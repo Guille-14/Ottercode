@@ -1,12 +1,55 @@
 # OtterCode — cerebro Obsidian: vault, notas de misión, recall y memoria
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from events import SseEvent, sse, Route
+
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+import json
+import os
+import re
+from pathlib import Path
+import requests
+from fastapi import HTTPException
+from pydantic import BaseModel, Field
+from backend.config import (
+    OLLAMA_BASE_URL, LLM_BACKEND, NUM_CTX_DEFAULT
+)
 from backend.runstate import OtterRun  # noqa: E402
 from backend.ollama import _ollama_ndjson_text  # noqa: E402
 from backend.config import LLM_BACKEND, NUM_CTX_DEFAULT, OLLAMA_BASE_URL  # noqa: E402
 from backend.agents import _chat_base  # noqa: E402
-from backend.ollama import *  # noqa: F401,F403
-from backend.runstate import *  # noqa: F401,F403
+from backend.ollama import (
+    _ollama_ndjson_text
+)
+from backend.runstate import (
+    OtterRun
+)
 from fastapi import APIRouter  # noqa
 router = APIRouter(tags=["vault"])
 
@@ -29,15 +72,39 @@ _VAULT_SKIP_DIRS = {".obsidian", ".trash", ".git", "node_modules"}
 _VAULT_MAX_NOTES = 400
 
 
+def default_vault_dir() -> Path:
+    """Vault persistente fuera de /tmp: ~/.ottercode/vault o %APPDATA%/OtterCode/vault."""
+    if os.name == "nt":
+        root = Path(os.environ.get("APPDATA") or Path.home()) / "OtterCode"
+    else:
+        root = Path.home() / ".ottercode"
+    vault = root / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+    return vault
+
+
 def _load_vault_cfg() -> None:
-    """Al arrancar: si hay vault guardado, actívalo como OTTERCODE_VAULT."""
+    """Al arrancar: vault persistente. Ignora rutas /tmp (se pierden al reiniciar)."""
+    if os.environ.get("OTTERCODE_VAULT", "").strip():
+        return
+    path = ""
     try:
         cfg = json.loads(_VAULT_CFG_PATH.read_text(encoding="utf-8"))
         path = str(cfg.get("path", "")).strip()
-        if path and Path(path).is_dir():
-            os.environ["OTTERCODE_VAULT"] = path
     except (OSError, json.JSONDecodeError):
-        pass
+        path = ""
+    ephemeral = (not path) or path.startswith("/tmp") or path.startswith("/var/tmp")
+    if ephemeral or not Path(path).is_dir():
+        dest = default_vault_dir()
+        try:
+            _VAULT_CFG_PATH.write_text(
+                json.dumps({"path": str(dest)}, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError:
+            pass
+        os.environ["OTTERCODE_VAULT"] = str(dest)
+        return
+    os.environ["OTTERCODE_VAULT"] = path
 
 
 _load_vault_cfg()
@@ -221,18 +288,21 @@ _USER_INSIGHT_SYSTEM = (
 )
 
 
-def _extract_user_insights(run: Any) -> str:
+def _extract_user_insights(run: Any, model: str = "") -> str:
     """Bullets sobre el usuario aprendidos de esta misión ('' si nada)."""
     material = (
         f"TAREA DEL USUARIO: {run.task_text[:600]}\n"
         f"RESULTADO: {_memory_mission_summary(run, 500)}"
     )
     num_ctx = getattr(run, "num_ctx", None) or NUM_CTX_DEFAULT
+    model = model or pick_memory_llm_model() or getattr(run, "model", "")
     try:
+        import backend as _be
+        _post = getattr(_be, "requests", requests).post
         if LLM_BACKEND == "openai":
-            resp = requests.post(
+            resp = _post(
                 f"{_chat_base()}/chat/completions",
-                json={"model": run.model, "stream": False, "max_tokens": 256,
+                json={"model": model, "stream": False, "max_tokens": 256,
                       "messages": [{"role": "system", "content": _USER_INSIGHT_SYSTEM},
                                    {"role": "user", "content": material}]},
                 timeout=(10, 90))
@@ -240,11 +310,11 @@ def _extract_user_insights(run: Any) -> str:
             data = resp.json()
             out = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         else:
-            resp = requests.post(
+            resp = _post(
                 f"{OLLAMA_BASE_URL}/api/generate",
-                json={"model": run.model, "prompt": material,
+                json={"model": model, "prompt": material,
                       "system": _USER_INSIGHT_SYSTEM, "stream": False,
-                      "options": {"num_ctx": int(num_ctx), "num_predict": 256}},
+                      "options": {"num_ctx": int(num_ctx), "num_predict": 256, "num_gpu": 99}},
                 timeout=(10, 90))
             resp.raise_for_status()
             out = _ollama_ndjson_text(resp.text) or ""
@@ -263,7 +333,7 @@ def memory_note_for_run(run: Any, status: str) -> Optional[str]:
     Devuelve la ruta relativa de la nota (para SSE/transcript) o None si no
     hay vault configurado o algo falla. Idempotente por misión (_memory_done).
     """
-    if getattr(run, "_memory_done", True):
+    if getattr(run, "_memory_done", False):
         return None
     run._memory_done = True                      # marca SIEMPRE: 1 intento
     root = _vault_root_checked()
@@ -324,9 +394,12 @@ def memory_note_for_run(run: Any, status: str) -> Optional[str]:
                      f"{primera_linea} · [[Misiones/{run.task_id}|detalle]]\n")
 
         # v4.0 · PERFIL_Usuario.md: lo que la balsa ha aprendido de TI
-        if os.environ.get("OTTERCODE_MEMORY_LLM", "1") != "0":
-            insights = _extract_user_insights(run)
-            if insights:
+        from backend.memory import pick_memory_llm_model
+        _mem_m = pick_memory_llm_model() or getattr(run, "model", "") or "x"
+        insights = _extract_user_insights(run, _mem_m)
+        if not insights:
+            insights = f"- {(resumen or run.task_text or '')[:160]}"
+        if insights:
                 perfil_u = base / "Perfil_Usuario.md"
                 if not perfil_u.exists():
                     perfil_u.write_text(
@@ -338,6 +411,10 @@ def memory_note_for_run(run: Any, status: str) -> Optional[str]:
                     )
                 with perfil_u.open("a", encoding="utf-8") as fh:
                     fh.write(f"\n## {fecha} — {run.task_text[:70]}\n{insights}\n")
+        try:
+            compact_episodic()
+        except Exception:
+            pass
         return rel_note
     except Exception:  # noqa: BLE001 — la memoria jamás tumba una misión
         return None
@@ -378,6 +455,7 @@ def _memory_recall(task_text: str, max_chars: int = 2400,
             if score >= 2:
                 candidates.append((score, p))
         candidates.sort(key=lambda sp: -sp[0])
+        perfil_rels.sort(key=lambda r: (0 if "usuario" in r.lower() else 1, r))
 
         blocks: List[str] = []
         used = 0
@@ -406,3 +484,43 @@ def _memory_recall(task_text: str, max_chars: int = 2400,
         return ""
 
 
+
+
+def compact_episodic(max_notes: int = 40) -> int:
+    """Resume misiones viejas con modelo 1B/3B (o el coder) a un diario compacto."""
+    root = _vault_root_checked()
+    if root is None:
+        return 0
+    misiones = root / _MEM_BASE / "Misiones"
+    if not misiones.is_dir():
+        return 0
+    files = sorted(misiones.glob("*.md"), key=lambda p: p.stat().st_mtime)
+    if len(files) < max_notes:
+        return 0
+    old = files[:-max_notes]
+    blob = "\n\n".join(p.read_text(encoding="utf-8", errors="replace")[:800] for p in old[:30])
+    prompt = "Resume en 12 viñetas las misiones antiguas (hechos, no fluff):\n" + blob[:6000]
+    model = os.environ.get("OTTERCODE_COMPACT_MODEL", "") or "qwen2.5:3b"
+    try:
+        from backend.memory import pick_memory_llm_model
+        model = pick_memory_llm_model() or model
+    except Exception:
+        pass
+    try:
+        resp = requests.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": model, "prompt": prompt, "stream": False,
+                  "options": {"num_predict": 400, "num_gpu": 99}},
+            timeout=(5, 60),
+        )
+        resp.raise_for_status()
+        from backend.ollama import _ollama_ndjson_text
+        out = (_ollama_ndjson_text(resp.text) or "").strip()
+    except Exception:
+        out = ""
+    if not out:
+        return 0
+    dest = root / _MEM_BASE / "Episodico.md"
+    prev = dest.read_text(encoding="utf-8") if dest.exists() else "# Diario episódico\n"
+    dest.write_text(prev + "\n\n## Compactación\n" + out[:4000] + "\n", encoding="utf-8")
+    return len(old)

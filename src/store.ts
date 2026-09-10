@@ -5,7 +5,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import { api, fetchWithAuth } from './api'
 import { parseSse } from './sse'
 import type { StudioTarget } from './features'
-import { convertTranscript } from './mission'
+
 
 
 export interface QueuedItem {
@@ -30,23 +30,47 @@ interface UiState {
   missionError: string | null
   studio: StudioTarget | null
   pendingPerm: { id: string; tool: string; title: string } | null
+  ctxHint: {
+    compact_hits: number
+    current_ctx?: number
+    next_ctx?: number
+    current_tps?: number
+    next_tps?: number
+    has_bench?: boolean
+    recommended?: number
+  } | null
   focus: boolean
   composerDraft: string
-  theme: 'dark' | 'light'
   model: string
   artifactsOpen: boolean
+  artifactsUserClosed: boolean
   loopMode: boolean
   maxRounds: number
   hacker: boolean
+  yolo: boolean
+  agentMode: 'chat' | 'chain'
+  startAgent: string
   totalTokens: number
   tokensPerSec: number
+  liveModel: string
+  liveAgent: string
+  missionStartedAt: number | null
+  sessionTitles: Record<string, string>
+  settingsSection: string
+  notice: string
+  fileTick: { path: string; version: number } | null
   setView: (v: string) => void
-  toggleTheme: () => void
+  setSettingsSection: (s: string) => void
+  setNotice: (s: string) => void
+
   setModel: (m: string) => void
   setArtifactsOpen: (open: boolean) => void
   setLoopMode: (v: boolean) => void
   setMaxRounds: (n: number) => void
   setHacker: (v: boolean) => void
+  setYolo: (v: boolean) => void
+  setAgentMode: (m: 'chat' | 'chain') => void
+  setStartAgent: (id: string) => void
   enqueueMission: (text: string, payload: Record<string, unknown>) => void
   dequeueMission: (id: string) => void
   startMission: (payload: Record<string, unknown>) => Promise<void>
@@ -57,23 +81,46 @@ interface UiState {
   toggleFocus: () => void
   setComposerDraft: (d: string) => void
   clearComposerDraft: () => void
-  approvePerm: (id: string, allow: boolean) => Promise<void>
+  approvePerm: (id: string, allow: boolean, always?: boolean) => Promise<void>
+  dismissCtxHint: () => void
+  applyCtxHint: () => Promise<void>
 }
 
 let seq = 0
 let controller: AbortController | null = null
 
-// Ventana deslizante para el cálculo de tokens/segundo en tiempo real (fuentas
-// de tiempo de cada token emitido por el modelo). No se persiste.
-let tokTimes: number[] = []
+// Ventana deslizante: cada marca es {t, n} con n = tokens estimados del chunk
+// (chars/4), no “1 por frame SSE”. Un frame de Ollama suele ser varias palabras.
+let tokMarks: { t: number; n: number }[] = []
 const RATE_WINDOW_MS = 3000
+let turnEst = 0
 
-// Marca el tiempo de llegada de un token (barato). El total/tps reales se
-// calculan al COMMITTEAR el lote, no por token (ver startMission).
-function pushTokenTime(): void {
+function estTok(s: string): number {
+  const len = (s || '').length
+  if (!len) return 0
+  return Math.max(1, Math.round(len / 4))
+}
+
+function noteTokens(n: number): void {
+  if (n <= 0) return
   const now = Date.now()
-  tokTimes.push(now)
-  while (tokTimes.length && now - tokTimes[0] > RATE_WINDOW_MS) tokTimes.shift()
+  tokMarks.push({ t: now, n })
+  while (tokMarks.length && now - tokMarks[0].t > RATE_WINDOW_MS) tokMarks.shift()
+  turnEst += n
+}
+
+function currentTps(): number {
+  const now = Date.now()
+  while (tokMarks.length && now - tokMarks[0].t > RATE_WINDOW_MS) tokMarks.shift()
+  if (!tokMarks.length) return 0
+  const n = tokMarks.reduce((s, x) => s + x.n, 0)
+  const span = Math.max(now - tokMarks[0].t, 200)
+  return n / (span / 1000)
+}
+
+function resetTokWindow(): void {
+  tokMarks = []
+  turnEst = 0
 }
 
 export const useUi = create<UiState>()(
@@ -87,20 +134,52 @@ export const useUi = create<UiState>()(
       missionError: null,
       studio: null,
       pendingPerm: null,
+      ctxHint: null,
       focus: false,
       composerDraft: '',
-      theme: 'dark',
       model: 'qwen3.5:4b',
-      artifactsOpen: true,
+      artifactsOpen: false,
+      artifactsUserClosed: false,
       loopMode: false,
       maxRounds: 8,
       hacker: false,
+      yolo: false,
+      agentMode: 'chat',
+      startAgent: 'agent',
       totalTokens: 0,
       tokensPerSec: 0,
-      setView: (v) => set({ view: v }),
+      liveModel: '',
+      liveAgent: '',
+      missionStartedAt: null,
+      sessionTitles: {},
+      settingsSection: 'parametros',
+      notice: '',
+      fileTick: null,
+      setSettingsSection: (s) => set({ settingsSection: s }),
+      setNotice: (s) => set({ notice: s }),
+      setView: (v) => {
+        const map: Record<string, string> = {
+          modelos: 'modelos',
+          skills: 'skills',
+          config: 'permisos',
+          estado: 'telemetria',
+        }
+        if (map[v]) set({ view: 'ajustes', settingsSection: map[v] })
+        else set({ view: v })
+      },
       clearMission: () => {
-        tokTimes = []
-        set({ mission: [], taskId: null, missionQueue: [], missionError: null, totalTokens: 0, tokensPerSec: 0 })
+        resetTokWindow()
+        set({
+          mission: [],
+          taskId: null,
+          missionQueue: [],
+          missionError: null,
+          totalTokens: 0,
+          tokensPerSec: 0,
+          liveModel: '',
+          liveAgent: '',
+          missionStartedAt: null,
+        })
       },
       enqueueMission: (text, payload) => {
         const item: QueuedItem = {
@@ -113,23 +192,42 @@ export const useUi = create<UiState>()(
       dequeueMission: (id) => {
         set((s) => ({ missionQueue: s.missionQueue.filter((q) => q.id !== id) }))
       },
-      toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
+
       setModel: (m) => set({ model: m }),
-      setArtifactsOpen: (open) => set({ artifactsOpen: open }),
+      setArtifactsOpen: (open) => set({ artifactsOpen: open, artifactsUserClosed: !open }),
       setLoopMode: (v) => set({ loopMode: v }),
       setMaxRounds: (n) => set({ maxRounds: n }),
       setHacker: (v) => set({ hacker: v }),
-      openStudio: (t) => set({ studio: t }),
-      closeStudio: () => set({ studio: null }),
+      setYolo: (v) => set({ yolo: v }),
+      setAgentMode: (m) => set({
+        agentMode: m,
+        startAgent: m === 'chain' ? 'architect' : (get().startAgent === 'architect' ? 'agent' : get().startAgent || 'agent'),
+      }),
+      setStartAgent: (id) => set({ startAgent: id }),
+      openStudio: (t) => {
+        const path = typeof t.path === 'string' ? t.path.trim() : ''
+        if (!path || path === '[object Object]') return
+        set({ studio: { taskId: t.taskId, path }, artifactsOpen: true, artifactsUserClosed: false })
+      },
+      closeStudio: () => set({ studio: null, artifactsOpen: false, artifactsUserClosed: true }),
       toggleFocus: () => set((s) => ({ focus: !s.focus })),
       setComposerDraft: (d) => set({ composerDraft: d }),
       clearComposerDraft: () => set({ composerDraft: '' }),
-      approvePerm: async (id, allow) => {
+      dismissCtxHint: () => set({ ctxHint: null }),
+      applyCtxHint: async () => {
+        const h = get().ctxHint
+        const nxt = Number(h?.next_ctx || h?.recommended || 0)
+        set({ ctxHint: null })
+        if (nxt >= 2048) {
+          await api.applyCtx(nxt).catch(() => undefined)
+        }
+      },
+      approvePerm: async (id, allow, always) => {
         set({ pendingPerm: null })
         await fetchWithAuth('/api/approve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, allow }),
+          body: JSON.stringify({ id, allow, always: Boolean(always) }),
         })
       },
       stopMission: (abort: boolean) => {
@@ -140,34 +238,67 @@ export const useUi = create<UiState>()(
         set({ streaming: false })
       },
       startMission: async (payload) => {
-        get().stopMission(false)
+        const wasStreaming = get().streaming
+        get().stopMission(wasStreaming)
         controller = new AbortController()
-        // 🧵 continuidad: si el payload continúa un hilo existente, NO vaciamos
-        // la vista — prefijamos la misión con el transcript previo y luego
-        // iremos haciendo APPEND de los eventos SSE del nuevo turno. Así las
-        // burbujas anteriores se conservan y el nuevo mensaje sigue debajo.
+        const missionAbort = controller
         const contTask =
           typeof payload.continue_task === 'string' && payload.continue_task
             ? payload.continue_task
             : get().taskId
         const keepOngoing = Boolean(contTask) && get().mission.length > 0
-        if (keepOngoing) {
-          try {
-            const detail = await api.historyDetail(contTask!)
-            const pref = convertTranscript(detail)
-            set({ taskId: contTask, mission: pref, streaming: true, missionError: null })
-          } catch {
-            set({ mission: [], taskId: contTask, streaming: true, missionError: null })
-          }
-        } else {
-          set({ mission: [], taskId: null, streaming: true, missionError: null })
+        const taskText = String(payload.task ?? '').trim()
+        const userEv: MissionEvent = {
+          id: ++seq,
+          at: Date.now(),
+          name: 'user',
+          data: { text: taskText },
         }
-        const res = await fetchWithAuth('/api/task', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        })
+        // Instantáneo: no esperamos historyDetail (eso congelaba la UI).
+        // Conservamos burbujas y añadimos el mensaje del usuario ya.
+        resetTokWindow()
+        if (keepOngoing) {
+          set({
+            taskId: contTask,
+            mission: [...get().mission.filter((e) => !isDoneName(e.name)), userEv],
+            streaming: true,
+            missionError: null,
+            missionStartedAt: Date.now(),
+            tokensPerSec: 0,
+          })
+        } else {
+          set({
+            mission: taskText ? [userEv] : [],
+            taskId: null,
+            streaming: true,
+            missionError: null,
+            missionStartedAt: Date.now(),
+            totalTokens: 0,
+            tokensPerSec: 0,
+          })
+        }
+        const st = get()
+        const body = {
+          ...payload,
+          mode: payload.mode ?? st.agentMode ?? 'chat',
+          start_agent: payload.start_agent ?? st.startAgent ?? (st.agentMode === 'chain' ? 'architect' : 'agent'),
+        }
+        let res: Response
+        try {
+          res = await fetchWithAuth(
+            '/api/task',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+              signal: missionAbort.signal,
+            },
+            0,
+          )
+        } catch (e) {
+          set({ streaming: false, missionError: (e as Error).message || 'No se pudo conectar con el backend' })
+          return
+        }
         if (!res.ok || !res.body) {
           let msg = `HTTP ${res.status}`
           try {
@@ -194,15 +325,66 @@ export const useUi = create<UiState>()(
             if (ev.name === 'session_id') {
               const tid = ev.data['task_id'] as string | undefined
               if (tid) set({ taskId: tid })
+              const raw = String(payload.task ?? '')
+              if (tid && raw && !keepOngoing) {
+                const title = raw.replace(/\s+/g, ' ').trim().slice(0, 48)
+                set((s) => ({ sessionTitles: { ...s.sessionTitles, [tid]: title } }))
+                void api.historyRename(tid, title).catch(() => undefined)
+              }
               continue
             }
             if (ev.name === 'perm_request') {
               set({ pendingPerm: ev.data as any })
               continue
             }
-            if (ev.name === 'token') {
-              pushTokenTime()
-              tokAcc++
+            if (ev.name === 'ctx_hint') {
+              set({ ctxHint: ev.data as UiState['ctxHint'] })
+            }
+            if (ev.name === 'file_updated') {
+              const p = String(ev.data.path || ev.data.filepath || '')
+              const v = Number(ev.data.version || Date.now())
+              if (p) set({ fileTick: { path: p, version: v } })
+            }
+            if (ev.name === 'token' && typeof ev.data.token === 'string') {
+              const n = estTok(String(ev.data.token))
+              noteTokens(n)
+              tokAcc += n
+            }
+            if (ev.name === 'agent_end') {
+              const official = Number(ev.data.tokens)
+              if (Number.isFinite(official) && official > 0) {
+                const delta = official - turnEst
+                tokAcc += delta
+                turnEst = official
+              }
+              const secs = Number(ev.data.seconds)
+              if (Number.isFinite(official) && official > 0 && Number.isFinite(secs) && secs > 0.05) {
+                set({ tokensPerSec: official / secs })
+              }
+            }
+            if (ev.name === 'agent_start') {
+              turnEst = 0
+              set({
+                liveAgent: String(ev.data.nombre ?? ev.data.agent ?? ''),
+                liveModel: String(ev.data.model ?? get().model),
+              })
+            }
+            if (ev.name === 'task_start') {
+              set({
+                missionStartedAt: Date.now(),
+                liveModel: String(ev.data.model ?? get().model),
+                liveAgent: String(ev.data.start_agent ?? get().startAgent),
+              })
+              const tid = get().taskId
+              const task = String(ev.data.task ?? '')
+              if (tid && task && !get().sessionTitles[tid]) {
+                const title = task.replace(/\s+/g, ' ').trim().slice(0, 48)
+                set((s) => ({ sessionTitles: { ...s.sessionTitles, [tid]: title } }))
+              }
+            }
+            if (ev.name === 'task_error') {
+              const d = String(ev.data.detail || ev.data.message || 'Error en la misión')
+              set({ missionError: d })
             }
             pending.push(ev)
           }
@@ -214,11 +396,16 @@ export const useUi = create<UiState>()(
           tokAcc = 0
           set((s) => ({
             mission: [...s.mission, ...evs.map((e) => ({ ...e, id: ++seq, at: Date.now() }))],
-            totalTokens: s.totalTokens + n,
-            tokensPerSec: Math.round((tokTimes.length / RATE_WINDOW_MS) * 1000),
+            totalTokens: Math.max(0, s.totalTokens + n),
+            tokensPerSec: currentTps() || s.tokensPerSec,
           }))
         }
-        const flusher = setInterval(commit, 80)
+        let rafId = 0
+        const rafLoop = () => {
+          commit()
+          if (get().streaming) rafId = requestAnimationFrame(rafLoop)
+        }
+        rafId = requestAnimationFrame(rafLoop)
         try {
           for (;;) {
             const { done, value } = await reader.read()
@@ -234,7 +421,7 @@ export const useUi = create<UiState>()(
         } catch {
           /* aborted */
         } finally {
-          clearInterval(flusher)
+          cancelAnimationFrame(rafId)
           commit()
           controller = null
           set({ streaming: false })
@@ -256,17 +443,26 @@ export const useUi = create<UiState>()(
     }),
     {
       name: 'otter-storage',
-      version: 1,
+        version: 4,
+        migrate: (persisted, version) => {
+          const p = (persisted || {}) as Record<string, unknown>
+          if (!p.agentMode) p.agentMode = 'chat'
+          if (!p.startAgent) p.startAgent = p.agentMode === 'chain' ? 'architect' : 'agent'
+          if (!p.sessionTitles) p.sessionTitles = {}
+          if (version < 4) p.artifactsOpen = false
+          return p as typeof persisted
+        },
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        taskId: state.taskId,
-        mission: state.mission,
-        theme: state.theme,
         model: state.model,
-        artifactsOpen: state.artifactsOpen,
+        artifactsOpen: false,
         loopMode: state.loopMode,
         maxRounds: state.maxRounds,
         hacker: state.hacker,
+        yolo: state.yolo,
+        agentMode: state.agentMode,
+        startAgent: state.startAgent,
+        sessionTitles: state.sessionTitles,
       }),
     },
   ),

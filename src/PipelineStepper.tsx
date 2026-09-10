@@ -3,6 +3,19 @@
 // acciones (Logs, Studio). Se alimenta de los eventos de la misión.
 import type { ReactNode } from 'react'
 import { Check, Loader2, MessagesSquare, MonitorSmartphone } from 'lucide-react'
+import { useUi } from './store'
+
+function MissionStepHint() {
+  const streaming = useUi((s) => s.streaming)
+  const started = useUi((s) => s.missionStartedAt)
+  if (!streaming && !started) return null
+  const n = useUi((s) => s.mission.filter((e) => e.name === 'tool_call').length)
+  return (
+    <span className="shrink-0 text-[11px] text-muted">
+      {n > 0 ? `${n} herramientas` : streaming ? 'en curso' : ''}
+    </span>
+  )
+}
 
 export interface ChainNode {
   id: string
@@ -21,7 +34,10 @@ export function deriveChainState(mission: any[]) {
   const done = new Set(mission.filter((e) => e.name === 'agent_end').map((e) => e.data?.agent))
   const last = mission[mission.length - 1]
   const current = last?.name === 'agent_start' ? last.data?.agent : null
-  return { active, done, current }
+  const startEv = mission.find((e) => e.name === 'task_start')
+  const missionMode = String(startEv?.data?.mode || '')
+  const single = active.has('agent') || missionMode === 'chat'
+  return { active, done, current, single }
 }
 
 export function AgentChain({
@@ -31,16 +47,16 @@ export function AgentChain({
   mission: any[]
   actions?: ReactNode
 }) {
-  const { active, current } = deriveChainState(mission)
+  const { active, current, single } = deriveChainState(mission)
 
   // Modo agente único (Claude Code): una sola burbuja Otter.
-  const single = active.has('agent')
   const nodes: ChainNode[] = single ? [{ id: 'agent', label: 'Otter' }] : DEFAULT_CHAIN
 
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-surface px-4">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
-        <span className="shrink-0 text-[11px] font-medium text-muted">Cadena</span>
+        <span className="shrink-0 text-[11px] font-medium text-muted">{single ? 'Agente' : 'Cadena'}</span>
+        <MissionStepHint />
         {nodes.map((n, i) => {
           const isCurrent = current === n.id
           const hasRun = active.has(n.id)
@@ -83,17 +99,19 @@ export function ChainActions({
   onToggleLogs,
   studioOpen,
   onToggleStudio,
+  onCompact,
 }: {
   hideLogs: boolean
   onToggleLogs: () => void
   studioOpen: boolean
   onToggleStudio: () => void
+  onCompact?: () => void
 }) {
   const btn = (on: boolean) =>
     `inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors ${
       on
         ? 'border-accent/40 bg-accent/10 text-accent'
-        : 'border-line2 text-muted hover:text-ink'
+        : 'border-line2 text-muted hover:bg-panel2 hover:text-ink'
     }`
   return (
     <>
@@ -101,6 +119,11 @@ export function ChainActions({
         <MessagesSquare className="h-3.5 w-3.5" />
         <span className="hidden sm:inline">Logs</span>
       </button>
+      {onCompact && (
+        <button type="button" className={btn(false)} onClick={onCompact} title="Compactar ahora (contexto)">
+          <span className="hidden sm:inline">Compactar ahora</span>
+        </button>
+      )}
       <button type="button" className={btn(studioOpen)} onClick={onToggleStudio} title="Panel de artefactos (Studio)">
         <MonitorSmartphone className="h-3.5 w-3.5" />
         <span className="hidden sm:inline">Studio</span>
@@ -111,8 +134,7 @@ export function ChainActions({
 
 // Backwards-compat: stepper embebido (usado por vistas que no usan App shell).
 export function PipelineStepper({ mission }: { mission: any[] }) {
-  const { active, done, current } = deriveChainState(mission)
-  const single = active.has('agent')
+  const { done, current, single } = deriveChainState(mission)
   const nodes: ChainNode[] = single ? [{ id: 'agent', label: 'Otter' }] : DEFAULT_CHAIN
   return (
     <div className="mb-3 flex items-center gap-2 overflow-x-auto rounded-lg border border-line bg-panel2 p-2">

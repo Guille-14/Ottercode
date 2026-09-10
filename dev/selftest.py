@@ -199,7 +199,9 @@ def main() -> int:
     )
     p_api = subprocess.Popen(
         [python_exe, "-m", "uvicorn", "backend:app", "--host", "127.0.0.1", "--port", str(API_PORT)],
-        env={**env, "OTTERCODE_OLLAMA": f"http://127.0.0.1:{MOCK_PORT}", "OTTERCODE_WORKSPACE": str(ws)},
+        env={**env, "OTTERCODE_OLLAMA": f"http://127.0.0.1:{MOCK_PORT}", "OTTERCODE_WORKSPACE": str(ws),
+             "OTTERCODE_ASK_PERMISSIONS": "0", "OTTERCODE_SANDBOX_REQUIRED": "0",
+             "OTTERCODE_FLUSH_EVERY_TURN": "1"},
         cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
@@ -1153,9 +1155,9 @@ def main() -> int:
               and "scroll-lock" in css33 and "pane-code" in css33, "")
 
         idx = requests.get(f"{API}/")
-        check("T33e versión 2.6.0 y bundle React versionado por hash",
+        check("T33e versión 3.0.0 y bundle React versionado por hash",
               idx.ok and "/static/assets/" in idx.text
-              and requests.get(f"{API}/api/healthz").json().get("version") == "2.6.0", "")
+              and requests.get(f"{API}/api/healthz").json().get("version") == "3.0.0", "")
 
         # ── T34 · v4.1: /ultraplan · /goal · /agents · /ultrareview ────────
         print("⚡ T34: ultraplan (esperar) · goal · resume_plan · ultrareview…")
@@ -1900,6 +1902,95 @@ def main() -> int:
         _, js47j, _ = _assets()
         check("T47j UI: contador de tokens (tokenStats/tok/s) en el bundle",
               "tokenStats" in js47j and "tok/s" in js47j and "totalTokens" in js47j, "")
+
+        print("\n🦦 T48: Hermes XML tools + schemas Ollama + RAG en Otter…")
+        hx = backend_mod.extract_tool_call(
+            '<tool_call>{"name": "read_file", "arguments": {"filepath": "a.py"}}</tool_call>')
+        hy = backend_mod.extract_tool_call(
+            '<function=write_file>\nfilepath=index.html\ncontent=hola\n</function>')
+        check("T48a extract_tool_call acepta Hermes <tool_call> y <function=>",
+              hx and hx.get("tool") == "read_file" and hx.get("arguments", {}).get("filepath") == "a.py"
+              and hy and hy.get("tool") == "write_file", str(hx))
+        schemas = tools_mod.get_ollama_tools()
+        rf = next((t for t in schemas if t["function"]["name"] == "read_file"), {})
+        check("T48b get_ollama_tools incluye properties reales (filepath)",
+              bool(rf.get("function", {}).get("parameters", {}).get("properties", {}).get("filepath")),
+              str(rf)[:160])
+        otter48 = backend_mod.get_agent("agent")
+        check("T48c Otter tiene semantic_search + index_workspace (RAG local)",
+              "semantic_search" in otter48.tools_disponibles
+              and "index_workspace" in otter48.tools_disponibles, "")
+        check("T48d LLM_BACKEND no se pisa con URL de OTTERCODE_API",
+              backend_mod.LLM_BACKEND in ("ollama", "openai"), backend_mod.LLM_BACKEND)
+
+        print("\n🧾 T49: C1-C4 tema claro · memoria SQLite · skills md · vault persistente…")
+        _, js49, css49 = _assets()
+        check("T49a CSS: paleta TR en :root y html.dark invertible",
+              "--oc-bg: #FFFFFF" in css49 and "--oc-accent: #18181B" in css49
+              and "html.dark" in css49 and "toggleTheme" in js49, "")
+        from backend.memory import add_memory, get_memory as gm
+        add_memory("Prefiere TypeScript y UIs claras", agente_id="agent")
+        rec = gm()
+        check("T49b memoria SQLite roundtrip (sin editar ficheros a mano)",
+              "TypeScript" in rec, rec[:120])
+        rsk = requests.get(f"{API}/api/skills")
+        names49 = [s["name"] for s in rsk.json().get("skills", [])] if rsk.ok else []
+        check("T49c skill markdown tono-directo listada en /api/skills",
+              rsk.ok and "tono-directo" in names49, str(names49[-8:]))
+        import backend.vault as vault_mod
+        d49 = vault_mod.default_vault_dir()
+        check("T49d vault por defecto fuera de /tmp (~/.ottercode o APPDATA)",
+              "/tmp" not in str(d49) and d49.is_dir(), str(d49))
+
+        print("\n⚡ T50: V1–V5 velocidad, router, SKILL.md, modelo por rol, hooks…")
+        from backend.config import OLLAMA_SPEED_ENV, warn_ollama_speed_env
+        check("T50a flags Ollama documentadas y aviso no bloqueante",
+              "OLLAMA_FLASH_ATTENTION" in OLLAMA_SPEED_ENV
+              and isinstance(warn_ollama_speed_env(), list), "")
+        from backend.router import route as route_fn
+        os.environ["OTTERCODE_ROUTER_LLM"] = "0"
+        d_hi = route_fn("hola")
+        d_code = route_fn("crea un archivo HTML con un contador en JS")
+        check("T50b router: saludo=directo, código=agente",
+              d_hi.get("tipo") == "directo" and d_code.get("tipo") == "agente",
+              f"{d_hi} {d_code}")
+        from backend.md_skills import get_md_skill
+        sk50 = get_md_skill("tono-directo")
+        check("T50c skill carpeta SKILL.md",
+              bool(sk50) and "SKILL.md" in (sk50 or {}).get("path", ""), str(sk50))
+        from backend.profiles import suggest_model_for_role
+        sug = suggest_model_for_role("Programador", ["qwen2.5:1.5b", "qwen2.5:14b"])
+        check("T50d Programador sugiere el modelo grande",
+              "14b" in str(sug.get("suggested")), sug)
+        from backend.hooks import post_code_generated
+        lint = post_code_generated("broken.py", "def (")
+        check("T50e hook post_code_generated marca syntax error",
+              lint.get("ok") is False and lint.get("issues"), lint)
+
+        print("\n🛟 T51: checkpoints · compact 75% · circuit breaker · ollama retry…")
+        from backend.runstate import append_checkpoint, load_checkpoints, note_stall, list_unfinished_checkpoints
+        class _R:
+            task_id = "t51-ckpt-unit"
+            start_agent = "developer"
+            files_report = [{"path": "a.py"}]
+        r51 = _R()
+        append_checkpoint(r51, done="archivo a.py", decisions="write", pending="tests", next_action="revisar")
+        rows = load_checkpoints("t51-ckpt-unit")
+        check("T51a checkpoint JSONL persistente",
+              rows and rows[-1].get("done") == "archivo a.py", str(rows[-1])[:120] if rows else "vacío")
+        blocked = False
+        for _ in range(3):
+            blocked = note_stall(r51, "pip", "No module named fooinexistente")
+        check("T51b circuit breaker a la 3ª repetición",
+              blocked is True and any(b.get("key") == "pip" for b in getattr(r51, "_blocked", [])), "")
+        src_eng = (ROOT / "backend" / "engine.py").read_text(encoding="utf-8")
+        src_oll = (ROOT / "backend" / "ollama.py").read_text(encoding="utf-8")
+        check("T51c compactación 75% + periódica en engine",
+              "0.75" in src_eng and "OTTERCODE_COMPACT_EVERY" in src_eng, "")
+        check("T51d Ollama backoff 2**attempt y log de retry",
+              "2 ** attempt" in src_oll and "Ollama retry" in src_oll, "")
+        check("T51e vigilancia térmica/VRAM en engine+HwMonitor",
+              "_thermal_ease" in src_eng and "VRAM al límite" in (ROOT / "src" / "HwMonitor.tsx").read_text(encoding="utf-8"), "")
 
     finally:
         for p in (p_api, p_mock):

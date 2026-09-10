@@ -2,7 +2,8 @@
 // aplicación al perfil activo.
 
 import { useEffect, useState } from 'react'
-import { api } from '../api'
+import { api, fetchWithAuth } from '../api'
+import { useUi } from '../store'
 import { Button, Card, Spinner } from '../ui'
 
 type S = Record<string, unknown>
@@ -40,7 +41,7 @@ function BoolField({ label, k, s, set, hint }: { label: string; k: string; s: S;
         type="checkbox"
         checked={Boolean(s[k])}
         onChange={(e) => set(k, e.target.checked)}
-        className="mt-0.5 h-4 w-4 accent-emerald-600"
+        className="mt-0.5 h-4 w-4 accent-accent"
       />
       <span>
         {label}
@@ -56,12 +57,24 @@ export default function OllamaConfig() {
   const [saving, setSaving] = useState(false)
   const [applied, setApplied] = useState('')
   const [dirty, setDirty] = useState(false)
+  const [benchLog, setBenchLog] = useState('')
+  const [benchBusy, setBenchBusy] = useState(false)
+  const [benchTable, setBenchTable] = useState<
+    { num_ctx: number; tps?: number; ok?: boolean; error?: string }[]
+  >([])
+  const [ctxCap, setCtxCap] = useState<number | null>(null)
+  const [suggest, setSuggest] = useState<number | null>(null)
+  const [promptKb, setPromptKb] = useState<number | null>(null)
+  const model = useUi((s) => s.model)
 
   const load = async () => {
     try {
       const r = await api.settings()
       setS(r.settings)
       setErr('')
+      const models = (r.ctx_bench as { models?: Record<string, { steps?: typeof benchTable; recommended?: number }> } | undefined)?.models
+      const first = models && Object.values(models)[0]
+      if (first?.steps) setBenchTable(first.steps as typeof benchTable)
     } catch (e) {
       setErr((e as Error).message)
     }
@@ -69,6 +82,21 @@ export default function OllamaConfig() {
   useEffect(() => {
     void load()
   }, [])
+
+  useEffect(() => {
+    if (!model) return
+    fetchWithAuth('/api/model/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    }).then((r) => r.json()).then((j) => {
+      if (j.context_length) setCtxCap(Number(j.context_length))
+      if (j.suggested_num_ctx) setSuggest(Number(j.suggested_num_ctx))
+    }).catch(() => undefined)
+    fetchWithAuth('/api/prompt-size').then((r) => r.json()).then((j) => {
+      if (j.total_kb != null) setPromptKb(Number(j.total_kb))
+    }).catch(() => undefined)
+  }, [model])
 
   const setNum = (k: string, v: number) => {
     if (!s) return
@@ -153,7 +181,7 @@ export default function OllamaConfig() {
       </div>
 
       {err && <Card className="p-3 text-sm text-danger">{err}</Card>}
-      {applied && <Card className="p-3 text-sm text-emerald-300">{applied}</Card>}
+      {applied && <Card className="p-3 text-sm text-accent">{applied}</Card>}
 
       <Card className="p-4">
         <h3 className="mb-3 text-sm font-semibold">Generación</h3>
@@ -173,8 +201,29 @@ export default function OllamaConfig() {
       <Card className="p-4">
         <h3 className="mb-3 text-sm font-semibold">Contexto</h3>
         <div className="grid gap-3 sm:grid-cols-3">
-          <NumField label="Num ctx (tamaño contexto)" k="num_ctx" s={s} set={setNum} min={2048} step={512} hint="Ventana de contexto en tokens" />
+          <NumField
+            label="Num ctx (tamaño contexto)"
+            k="num_ctx"
+            s={s}
+            set={(k, v) => {
+              if (ctxCap && v > ctxCap) {
+                setErr(`num_ctx ${v} supera el techo del modelo (${ctxCap})`)
+              }
+              setNum(k, v)
+            }}
+            min={2048}
+            max={ctxCap || undefined}
+            step={512}
+            hint={
+              `Modelo ${model}`
+              + (ctxCap ? ` · techo ${ctxCap}` : '')
+              + (suggest ? ` · sugerido ${suggest}` : '')
+            }
+          />
         </div>
+        {promptKb != null && (
+          <p className="mt-2 text-[11px] text-muted">Prompt estimado: {promptKb} KB (system + skills + schemas). Cambia una skill y recarga para ver el delta.</p>
+        )}
       </Card>
 
       <Card className="p-4">

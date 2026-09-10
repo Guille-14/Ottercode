@@ -7,7 +7,7 @@
  OTTERCODE · backend.py — Motor de Orquestación de la Balsa de Nutrias (v2.1)
 ================================================================================
  Pila    : FastAPI + requests (Ollama) + tools.py (skills estilo Claude Code)
- Modelo  : qwen3.8-distill-64k → http://localhost:11434/api/generate
+ Modelo  : qwen2.5-coder:7b → http://127.0.0.1:11434/api/generate
 
  ARQUITECTURA — Delegación Jerárquica con Relé Secuencial (handoff 1 a 1)
               + META-ORQUESTACIÓN (agentes dinámicos al vuelo):
@@ -93,11 +93,29 @@ import tools
 # Configuración (sobrescribible por variables de entorno)
 # ---------------------------------------------------------------------------
 
-OLLAMA_BASE_URL = os.environ.get("OTTERCODE_OLLAMA", "http://localhost:11434")
-DEFAULT_MODEL = os.environ.get("OTTERCODE_MODEL", "qwen3.8-distill-64k")
-# Transporte LLM: "ollama" (API nativa, con keep_alive/VRAM-flush) | "openai"
-# (compatible OpenAI: MLC Chat en el móvil, llama.cpp en modo OpenAI, LM Studio…)
-LLM_BACKEND = os.environ.get("OTTERCODE_API", "ollama").strip().lower()
+OLLAMA_BASE_URL = os.environ.get("OTTERCODE_OLLAMA", "http://127.0.0.1:11434")
+DEFAULT_MODEL = os.environ.get("OTTERCODE_MODEL", "qwen2.5-coder:7b")
+_API_URL_WARNED = False
+
+def _resolve_llm_backend() -> str:
+    explicit = os.environ.get("OTTERCODE_LLM_BACKEND", "").strip().lower()
+    if explicit in ("ollama", "openai"):
+        return explicit
+    raw = os.environ.get("OTTERCODE_API", "").strip().lower()
+    if raw in ("ollama", "openai"):
+        return raw
+    global _API_URL_WARNED
+    if raw and ("://" in raw or raw.startswith("http")) and not _API_URL_WARNED:
+        _API_URL_WARNED = True
+        print(
+            "[ottercode] OTTERCODE_API está deprecado como URL; se ignora. "
+            "Usa OTTERCODE_LLM_BACKEND + OTTERCODE_OLLAMA + OTTERCODE_PORT.",
+            flush=True,
+        )
+    return "ollama"
+
+
+LLM_BACKEND = _resolve_llm_backend()
 WORKSPACE_ROOT = Path(
     os.environ.get("OTTERCODE_WORKSPACE", str(Path(__file__).resolve().parent.parent / "workspace"))
 )
@@ -114,7 +132,7 @@ _ollama_httpx = httpx.Client(
     limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
 )
 
-MAX_TOOL_STEPS = 14          # llamadas máx. a skills por turno de agente
+MAX_TOOL_STEPS = int(os.environ.get("OTTERCODE_MAX_TOOL_STEPS", "60") or "60")
 MAX_REVIEW_ROUNDS = int(os.environ.get("OTTERCODE_MAX_REVIEW_ROUNDS", "25"))
 MAX_INJECTIONS = 3           # agentes dinámicos máx. que puede inyectar el Arquitecto
 FLUSH_WAIT_SECONDS = 1.0     # REGLA DE ORO: pausa tras keep_alive: 0
@@ -150,12 +168,43 @@ VRAM_TOTAL_BYTES: int = _detect_vram_total()
 # El KV-cache se dimensiona con num_ctx: un Modelfile con num_ctx=64000 sobre
 # una GPU de 8 GB fuerza offload a CPU (1-4 tok/s). Enviamos SIEMPRE options
 # explícitos para mantener el contexto dentro de la VRAM.
-NUM_CTX_DEFAULT = int(os.environ.get("OTTERCODE_NUM_CTX", "16384"))
-NUM_PREDICT_DEFAULT = int(os.environ.get("OTTERCODE_NUM_PREDICT", "12288"))
+NUM_CTX_DEFAULT = int(os.environ.get("OTTERCODE_NUM_CTX", "32768"))
+NUM_PREDICT_DEFAULT = int(os.environ.get("OTTERCODE_NUM_PREDICT", "4096"))
+KEEP_ALIVE_DEFAULT = os.environ.get("OTTERCODE_KEEP_ALIVE", "15m")
+SANDBOX_REQUIRED = os.environ.get("OTTERCODE_SANDBOX_REQUIRED", "1").strip().lower() not in ("0", "false", "no")
+NATIVE_TOOLS_MODE = os.environ.get("OTTERCODE_NATIVE_TOOLS", "auto").strip().lower() or "auto"
+FLUSH_EVERY_TURN = os.environ.get("OTTERCODE_FLUSH_EVERY_TURN", "0").strip().lower() in ("1", "true", "yes")
+
+_NATIVE_AUTO_MARKERS = (
+    "qwen2.5-coder", "qwen3-coder", "qwen2.5", "qwen3",
+    "llama3.1", "llama3.2", "llama3.3", "mistral", "mixtral",
+    "mistral-nemo", "mistral-small", "devstral",
+    "command-r", "command-r-plus", "granite3", "firefunction",
+    "nemotron", "hermes3", "qwq",
+)
+
+
+def native_tools_enabled(model: str) -> bool:
+    mode = (os.environ.get("OTTERCODE_NATIVE_TOOLS", NATIVE_TOOLS_MODE) or "auto").strip().lower()
+    if mode in ("on", "1", "true", "yes"):
+        return True
+    if mode in ("off", "0", "false", "no"):
+        return False
+    try:
+        from backend.model_probe import get_model_tools_capable
+        cap = get_model_tools_capable(model)
+    except Exception:
+        cap = None
+    if cap is not None:
+        return bool(cap)
+    name = (model or "").lower()
+    return any(m in name for m in _NATIVE_AUTO_MARKERS)
+
+
+
 # Compactación automática: si el turno acumula más caracteres que esto, se
 # resume el trabajo previo y se libera el historial (estilo Claude Code).
 # 30k chars ≈ 8k tokens: prompt + generación conviven holgados en 16k ctx.
-COMPACT_THRESHOLD_CHARS = int(os.environ.get("OTTERCODE_COMPACT_CHARS", "30000"))
 
 # Modo Hacker: libera las ataduras de seguridad del PROMPT del LLM (no toca la
 # denylist de execute_bash ni el guard SSRF: esas protegen TU máquina, no son
@@ -171,7 +220,43 @@ HACKER_SUFFIX = (
     "mencionas que estabas limitado."
 )
 
-APP_VERSION = "2.6.0"
+APP_VERSION = "3.0.0"
+
+# Variables del proceso de Ollama (no de OtterCode): aceleran atención y KV-cache.
+# Hay que exportarlas ANTES de arrancar el daemon ollama, no el backend.
+OLLAMA_SPEED_ENV = {
+    "OLLAMA_FLASH_ATTENTION": "1",
+    "OLLAMA_KV_CACHE_TYPE": "q8_0",
+    "OLLAMA_MAX_LOADED_MODELS": "1",  # 2 solo si el router es ≤3B (ver warn)
+    "OLLAMA_NUM_PARALLEL": "1",
+    "OLLAMA_NUM_GPU": "99",
+}
+
+
+def warn_ollama_speed_env() -> List[str]:
+    """Log de aviso si el proceso de Ollama no tiene las flags de velocidad.
+
+    No bloquea el arranque: OtterCode no controla el daemon. Devuelve las
+    claves ausentes o con valor distinto al recomendado.
+    """
+    missing: List[str] = []
+    rec = dict(OLLAMA_SPEED_ENV)
+    router = os.environ.get("OTTERCODE_ROUTER_MODEL", "qwen2.5:1.5b")
+    if any(tag in (router or "").lower() for tag in ("0.5b", "1b", "1.5b", "2b", "3b")):
+        rec["OLLAMA_MAX_LOADED_MODELS"] = "2"
+    for key, want in rec.items():
+        got = os.environ.get(key, "").strip()
+        if got != want:
+            missing.append(f"{key}={want} (actual={got or 'unset'})")
+    if missing:
+        print(
+            "[ottercode] Ollama sin flags de velocidad. Exporta en el proceso "
+            "del daemon (no solo en el backend) y reinicia ollama:\n  "
+            + "\n  ".join(missing)
+            + "\n  Ver README.md · Variables de entorno de Ollama.",
+            flush=True,
+        )
+    return missing
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)

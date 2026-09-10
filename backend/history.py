@@ -1,9 +1,38 @@
 # OtterCode — persistencia de sesiones (historial lateral y limpieza)
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from events import SseEvent, sse, Route
+
+from backend.config import (
+    WORKSPACE_ROOT, DB_PATH
+)
 from backend.runstate import OtterRun  # noqa: E402
 from backend.config import DB_PATH, WORKSPACE_ROOT  # noqa: E402
-from backend.db import *  # noqa: F401,F403
 
 HISTORY: list[dict] = []
 
@@ -84,9 +113,9 @@ def _append_session_event(session_id: Optional[str], event: Dict[str, Any]) -> N
 # listar los prefijos/familias modernas.
 TOOL_CAPABLE_MODELS = {
     "llama3.1", "llama3.2", "llama3.3",
-    "qwen2.5", "qwen3", "qwen3.8",
+    "qwen2.5-coder", "qwen3-coder", "qwen2.5", "qwen3", "qwen3.8",
     "gemma2", "gemma3", "gemma4",
-    "mistral", "mistral-nemo", "mixtral",
+    "mistral", "mistral-nemo", "mixtral", "devstral",
     "phi4", "sqlcoder",
 }
 

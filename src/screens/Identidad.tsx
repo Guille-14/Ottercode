@@ -1,10 +1,12 @@
 // Pantalla Identidad: editar SOUL.md y USER.md, gestionar Memoria y Escuadrón.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Bot, Search, ChevronDown, ChevronUp, Shield, Trash2, Plus } from 'lucide-react'
 import { api, type IdentityDoc, type AgentInfo } from '../api'
 import { Button, Card } from '../ui'
 import { F } from '../features'
+import ConfirmDialog from '../ConfirmDialog'
+import UndoToast from '../UndoToast'
 
 type Kind = 'soul' | 'user'
 
@@ -69,9 +71,12 @@ function Editor({ kind, title, hint }: { kind: Kind; title: string; hint: string
   )
 }
 
-function MemoryManager() {
+export function MemoryManager() {
   const [memory, setMemory] = useState<string[]>([])
   const [newItem, setNewItem] = useState('')
+  const [confirmIdx, setConfirmIdx] = useState<number | null>(null)
+  const [undoLabel, setUndoLabel] = useState('')
+  const pending = useRef<{ idx: number; t: number } | null>(null)
 
   const loadMemory = async () => {
     try {
@@ -91,14 +96,9 @@ function MemoryManager() {
     await loadMemory()
   }
 
-  const handleDelete = async (index: number) => {
-    await api.deleteMemory(index)
-    await loadMemory()
-  }
-
   return (
     <Card className="p-4 space-y-4">
-      <h3 className="text-sm font-semibold">Memoria de Sesión (MEMORY.md)</h3>
+      <h3 className="text-sm font-semibold">Memoria de sesión (MEMORY.md)</h3>
       <div className="flex gap-2">
         <input
           className="flex-1 rounded-lg border border-line bg-canvas px-3 py-2 text-xs"
@@ -106,7 +106,7 @@ function MemoryManager() {
           onChange={(e) => setNewItem(e.target.value)}
           placeholder="Nuevo recuerdo…"
         />
-        <Button onClick={handleAdd}>
+        <Button onClick={handleAdd} aria-label="Añadir recuerdo">
           <Plus className="h-4 w-4" />
         </Button>
       </div>
@@ -114,12 +114,45 @@ function MemoryManager() {
         {memory.map((item, i) => (
           <li key={i} className="flex items-center justify-between rounded-lg bg-canvas p-2 text-xs border border-line">
             <span>{item}</span>
-            <Button variant="ghost" className="h-7 w-7 p-0" onClick={() => handleDelete(i)}>
+            <Button variant="ghost" className="h-7 w-7 p-0" aria-label="Eliminar recuerdo" onClick={() => setConfirmIdx(i)}>
               <Trash2 className="h-3.5 w-3.5 text-danger" />
             </Button>
           </li>
         ))}
       </ul>
+      <ConfirmDialog
+        open={confirmIdx !== null}
+        itemLabel={confirmIdx !== null ? `el recuerdo «${memory[confirmIdx]}»` : 'este recuerdo'}
+        onCancel={() => setConfirmIdx(null)}
+        onConfirm={() => {
+          const i = confirmIdx
+          setConfirmIdx(null)
+          if (i == null) return
+          const label = memory[i]
+          setMemory((m) => m.filter((_, j) => j !== i))
+          setUndoLabel(label)
+          if (pending.current) window.clearTimeout(pending.current.t)
+          pending.current = {
+            idx: i,
+            t: window.setTimeout(() => {
+              void api.deleteMemory(i)
+              setUndoLabel('')
+              pending.current = null
+            }, 8000),
+          }
+        }}
+      />
+      {undoLabel && (
+        <UndoToast
+          label={undoLabel}
+          onUndo={() => {
+            if (pending.current) window.clearTimeout(pending.current.t)
+            pending.current = null
+            setUndoLabel('')
+            void loadMemory()
+          }}
+        />
+      )}
     </Card>
   )
 }
@@ -259,7 +292,7 @@ export default function Identidad() {
               tab === 'identity' ? 'bg-accent text-accentink shadow-xs' : 'text-muted hover:text-ink'
             }`}
           >
-            <Shield className="h-3.5 w-3.5" />
+            <Bot className="h-3.5 w-3.5" />
             <span>SOUL/USER.md</span>
           </button>
         </div>

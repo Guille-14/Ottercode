@@ -37,6 +37,8 @@ class Route:
     SKILL = "/api/skill"
     TREE = "/api/tree"
     FILE = "/api/file"
+    FILE_SAVE = "/api/file"
+    APPROVE = "/api/approve"
     WORKSPACE = "/api/workspace"
     TASK_ZIP = "/api/task/{task_id}/zip"
     HISTORY = "/api/history"
@@ -64,6 +66,13 @@ class Route:
     HISTORY_PRUNE = "/api/history/{task_id}/prune"
     SKILLS_ENABLE = "/api/skills/enable"
     AUTH_TOKEN = "/api/auth/token"
+    CHECKPOINTS = "/api/checkpoints"
+    PROJECT = "/api/project"
+    MCP = "/api/mcp"
+    COMPACT = "/api/compact"
+    TODOS = "/api/todos"
+    CTX_BENCH = "/api/ctx-bench"
+    CTX_BENCH_APPLY = "/api/ctx-bench/apply"
 
 
 class SseEvent(Enum):
@@ -101,6 +110,10 @@ class SseEvent(Enum):
 
     # Chat specific
     session_id = auto()
+    perm_request = auto()
+    ctx_hint = auto()
+    diff = auto()
+    file_updated = auto()
 
 def sse(event: SseEvent, data: Dict[str, Any]) -> str:
     """Formatea un evento Server-Sent Events usando el enum centralizado."""

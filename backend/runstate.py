@@ -1,9 +1,43 @@
 # OtterCode — estado de ejecución (OtterRun) y control de aborto
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from events import SseEvent, sse, Route
+
+from backend.config import (
+    MAX_REVIEW_ROUNDS
+)
 from backend.config import MAX_REVIEW_ROUNDS  # noqa: E402
+import re
+import json
 from backend.agents import get_agent  # noqa: E402
-from backend.agents import *  # noqa: F401,F403
+from backend.agents import (
+    get_agent
+)
 
 
 class AbortRequested(Exception):
@@ -32,7 +66,7 @@ class OtterRun:
         self.hacker = hacker                  # 🏴 modo sin censura (solo prompt)
         self.num_ctx = num_ctx                # override de contexto (v3.3)
         # FASE 3 · parámetros del perfil activo
-        self.temperature = temperature if temperature is not None else 0.7
+        self.temperature = temperature
         self.top_p = top_p if top_p is not None else 0.9
         # FASE 4 · inyección temporal de sistema (/sys)
         self.system_inject = (system_inject or "").strip()
@@ -122,5 +156,138 @@ def _condense_entries(entries: List[Tuple[str, str]]) -> str:
         tr = tool_result[-res_chars:] if tool_result else ""
         parts.append(f"## PASO {i}\nSALIDA DEL AGENTE:\n{mo}\nRESULTADO DE LA SKILL:\n{tr}")
     return "\n\n".join(parts)[:total_budget]
+
+
+CHECKPOINT_DIR = Path(__file__).resolve().parent / "data" / "checkpoints"
+
+
+def _ck_path(mission_id: str) -> Path:
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^\w.\-]+", "_", mission_id or "unknown")[:80]
+    return CHECKPOINT_DIR / f"{safe}.jsonl"
+
+
+def append_checkpoint(
+    run: Any,
+    *,
+    done: str,
+    decisions: str = "",
+    pending: str = "",
+    next_action: str = "",
+    kind: str = "step",
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """JSONL append-only: una línea por unidad de trabajo."""
+    rec = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "task_id": getattr(run, "task_id", ""),
+        "kind": kind,
+        "done": done,
+        "decisions": decisions,
+        "pending": pending,
+        "next_action": next_action,
+        "agent": getattr(run, "start_agent", ""),
+        "files": [f.get("path") if isinstance(f, dict) else str(f)
+                  for f in (getattr(run, "files_report", None) or [])][:40],
+        "open": True,
+        **(extra or {}),
+    }
+    try:
+        path = _ck_path(str(getattr(run, "task_id", "") or "unknown"))
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def load_checkpoints(mission_id: str) -> List[Dict[str, Any]]:
+    path = _ck_path(mission_id)
+    if not path.is_file():
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    except OSError:
+        return []
+    return out
+
+
+def last_checkpoint(mission_id: str) -> Optional[Dict[str, Any]]:
+    rows = load_checkpoints(mission_id)
+    return rows[-1] if rows else None
+
+
+def mark_checkpoint_closed(mission_id: str) -> None:
+    rec = last_checkpoint(mission_id) or {}
+    dummy = type("R", (), {"task_id": mission_id, "start_agent": "", "files_report": []})()
+    append_checkpoint(dummy, done="misión cerrada", kind="closed",
+                      pending="", next_action="", extra={"open": False})
+
+
+def list_unfinished_checkpoints(limit: int = 12) -> List[Dict[str, Any]]:
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    found: List[Dict[str, Any]] = []
+    for p in sorted(CHECKPOINT_DIR.glob("*.jsonl"), key=lambda x: x.stat().st_mtime, reverse=True):
+        rows = load_checkpoints(p.stem)
+        if not rows:
+            continue
+        last = rows[-1]
+        if last.get("kind") == "closed" or last.get("open") is False:
+            continue
+        found.append({
+            "task_id": p.stem,
+            "last": last,
+            "steps": len(rows),
+            "path": str(p),
+        })
+        if len(found) >= limit:
+            break
+    return found
+
+
+def resume_summary(mission_id: str) -> str:
+    last = last_checkpoint(mission_id)
+    if not last:
+        return ""
+    return (
+        f"# CHECKPOINT PREVIO (reanudar, no repetir lo hecho)\n"
+        f"Hecho: {last.get('done','')}\n"
+        f"Decisiones: {last.get('decisions','')}\n"
+        f"Pendiente: {last.get('pending','')}\n"
+        f"Siguiente acción: {last.get('next_action','')}\n"
+        f"No reescribas archivos ya listados: {last.get('files') or []}"
+    )
+
+
+def note_stall(run: Any, key: str, error: str, limit: int = 3) -> bool:
+    """True si la subtarea queda bloqueada (≥limit errores iguales)."""
+    stalls = getattr(run, "_stalls", None)
+    if not isinstance(stalls, dict):
+        stalls = {}
+        run._stalls = stalls
+    sig = f"{key}|{(error or '')[:180]}"
+    n = int(stalls.get(sig, 0)) + 1
+    stalls[sig] = n
+    if n < limit:
+        return False
+    blocked = getattr(run, "_blocked", None)
+    if not isinstance(blocked, list):
+        blocked = []
+        run._blocked = blocked
+    blocked.append({"key": key, "error": error[:300], "n": n})
+    append_checkpoint(
+        run, kind="blocked", done=f"subtarea bloqueada: {key}",
+        decisions=f"{n} errores iguales", pending=error[:200],
+        next_action="intervención humana o saltar subtarea",
+        extra={"blocked": True},
+    )
+    return True
 
 

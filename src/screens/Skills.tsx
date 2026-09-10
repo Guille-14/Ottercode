@@ -1,7 +1,8 @@
 // Pantalla Skills (estilo V2): habilita/deshabilita las herramientas que
 // OtterCode puede usar (bash, web_search, memoria, ficheros…), persistidas en
 // el backend (skills_config.json).
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import UndoToast from '../UndoToast'
 import { Wrench } from 'lucide-react'
 import { api, type Skill } from '../api'
 import { Card } from '../ui'
@@ -10,6 +11,7 @@ export default function Skills() {
   const [skills, setSkills] = useState<Skill[]>([])
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
+  const [q, setQ] = useState('')
 
   const load = async () => {
     try {
@@ -24,10 +26,27 @@ export default function Skills() {
     void load()
   }, [])
 
+  const pending = useRef<{ name: string; t: number } | null>(null)
+  const [undoSkill, setUndoSkill] = useState('')
+
   const toggle = async (s: Skill) => {
+    if (s.enabled) {
+      setSkills((list) => list.map((x) => (x.name === s.name ? { ...x, enabled: false } : x)))
+      setUndoSkill(s.name)
+      if (pending.current) window.clearTimeout(pending.current.t)
+      pending.current = {
+        name: s.name,
+        t: window.setTimeout(() => {
+          void api.setSkill(s.name, false)
+          setUndoSkill('')
+          pending.current = null
+        }, 8000),
+      }
+      return
+    }
     setBusy(s.name)
     try {
-      await api.setSkill(s.name, !s.enabled)
+      await api.setSkill(s.name, true)
       await load()
     } catch (e) {
       setErr((e as Error).message)
@@ -46,7 +65,7 @@ export default function Skills() {
           <div>
             <h1 className="text-lg font-semibold tracking-tight">Skills</h1>
             <p className="text-xs text-muted">
-              Activa las herramientas que los agentes pueden usar durante las misiones.
+              Herramientas del sistema y skills markdown en backend/skills/*.md. Las activas se inyectan en el system prompt.
             </p>
           </div>
         </div>
@@ -85,7 +104,7 @@ export default function Skills() {
                     } disabled:opacity-50`}
                   >
                     <span
-                      className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                      className={`absolute top-0.5 h-5 w-5 rounded-full bg-canvas shadow transition-all ${
                         on ? 'left-[22px]' : 'left-0.5'
                       }`}
                     />
@@ -100,6 +119,17 @@ export default function Skills() {
       <p className="text-center text-[11px] text-muted">
         Los cambios se aplican a las próximas misiones.
       </p>
+      {undoSkill && (
+        <UndoToast
+          label={undoSkill}
+          onUndo={() => {
+            if (pending.current) window.clearTimeout(pending.current.t)
+            pending.current = null
+            setUndoSkill('')
+            void load()
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -54,7 +54,7 @@ function SkillsPane() {
                 aria-label={`${s.name}: ${s.enabled ? 'desactivar' : 'activar'}`}
               >
                 <span
-                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${
+                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-canvas transition-all ${
                     s.enabled ? 'left-[22px]' : 'left-0.5'
                   }`}
                 />
@@ -70,6 +70,9 @@ function SkillsPane() {
 function ProfilesPane() {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [active, setActive] = useState('')
+  const [role, setRole] = useState('Programador')
+  const [models, setModels] = useState<{ name: string; size_gb?: number; vram_est_gb?: number }[]>([])
+  const [suggest, setSuggest] = useState<{ suggested?: string; hint?: string }>({})
 
   const load = async () => {
     const r = await F.loadProfiles()
@@ -78,6 +81,12 @@ function ProfilesPane() {
   }
   useEffect(() => {
     void load()
+    api.models().then((r) => {
+      const details = (r as { details?: { name: string; size_gb?: number; vram_est_gb?: number }[] }).details
+      setModels(details?.length ? details : (r.models || []).map((n) => ({ name: n })))
+      const sg = (r as { suggest?: Record<string, { suggested?: string; hint?: string }> }).suggest
+      if (sg?.Programador) setSuggest(sg.Programador)
+    }).catch(() => undefined)
   }, [])
 
   const select = async (name: string) => {
@@ -87,7 +96,45 @@ function ProfilesPane() {
 
   return (
     <Card className="p-4" id="profileSelect">
-      <h3 className="mb-3 text-sm font-semibold">Perfiles</h3>
+      <h3 className="mb-3 text-sm font-semibold">Perfiles / modelo por bot</h3>
+      <label className="mb-3 block text-xs text-muted">
+        Rol del bot
+        <input
+          className="mt-1 w-full rounded-md border border-line bg-canvas px-2 py-1 text-sm text-ink"
+          value={role}
+          onChange={(e) => {
+            setRole(e.target.value)
+            api.models().then((r) => {
+              const sg = (r as { suggest?: Record<string, { suggested?: string; hint?: string }> }).suggest || {}
+              const hit = Object.entries(sg).find(([k]) =>
+                e.target.value.toLowerCase().includes(k.toLowerCase()),
+              )
+              setSuggest(hit ? hit[1] : sg.Programador || {})
+            }).catch(() => undefined)
+          }}
+        />
+      </label>
+      {suggest.hint && (
+        <p className="mb-2 text-xs text-muted">
+          Recomendación: <strong className="text-ink">{suggest.suggested}</strong> — {suggest.hint}
+        </p>
+      )}
+      <ul className="mb-3 max-h-40 overflow-auto text-xs">
+        {models.map((m) => {
+          const rec = m.name === suggest.suggested
+          return (
+            <li
+              key={m.name}
+              className={`flex justify-between rounded px-2 py-1 ${rec ? 'bg-accent text-accentink' : ''}`}
+            >
+              <span>{m.name}{rec ? ' · recomendado' : ''}</span>
+              <span className={rec ? 'opacity-80' : 'text-muted'}>
+                {m.size_gb ? `${m.size_gb} GB · ~${m.vram_est_gb} GB VRAM` : ''}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
       {profiles.length === 0 ? (
         <p className="text-sm text-muted">Sin perfiles.</p>
       ) : (
@@ -118,16 +165,92 @@ function ProfilesPane() {
   )
 }
 
-export default function Configuracion() {
+function ProjectPane() {
+  const [path, setPath] = useState('')
+  const [msg, setMsg] = useState('')
+  useEffect(() => {
+    api.project().then((r) => setPath(r.path || '')).catch(() => undefined)
+  }, [])
+  const save = async () => {
+    try {
+      const r = await api.setProject(path)
+      setPath(r.path)
+      setMsg(r.path ? `Proyecto: ${r.path}` : 'Usando workspace por misión')
+    } catch (e) {
+      setMsg(String(e))
+    }
+  }
   return (
-    <div className="space-y-4">
+    <Card className="p-4">
+      <h3 className="mb-3 text-sm font-semibold">Carpeta del proyecto</h3>
+      <p className="mb-2 text-xs text-muted">
+        Si la indicas, Otter trabaja ahí en lugar de workspace/&lt;misión&gt;. Vacío = sandbox por tarea.
+      </p>
+      <input
+        className="mb-2 w-full rounded-md border border-line bg-canvas px-2 py-1 text-sm text-ink"
+        value={path}
+        onChange={(e) => setPath(e.target.value)}
+        placeholder="/home/tú/mi-repo"
+      />
+      <button type="button" onClick={() => void save()} className="rounded-md bg-accent px-3 py-1 text-xs text-accentink">
+        Guardar
+      </button>
+      {msg ? <p className="mt-2 text-xs text-muted">{msg}</p> : null}
+    </Card>
+  )
+}
+
+function McpPane() {
+  const [data, setData] = useState<{ ready?: boolean; servers?: { name: string; connected: boolean; tools: string[] }[] }>({})
+  useEffect(() => {
+    api.mcp().then(setData).catch(() => undefined)
+  }, [])
+  return (
+    <Card className="p-4">
+      <h3 className="mb-3 text-sm font-semibold">MCP</h3>
+      <p className="mb-2 text-xs text-muted">
+        Servidores en mcp_servers.json · {data.ready ? 'listo' : 'sin herramientas cargadas'}
+      </p>
+      {(data.servers || []).length === 0 ? (
+        <p className="text-sm text-muted">Ningún servidor configurado.</p>
+      ) : (
+        <ul className="space-y-1 text-sm">
+          {(data.servers || []).map((s) => (
+            <li key={s.name} className="flex justify-between">
+              <span>{s.name}</span>
+              <Badge>{s.connected ? `${s.tools.length} tools` : 'offline'}</Badge>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
+export default function Configuracion({ pane = 'all' }: { pane?: 'all' | 'permisos' | 'mcp' }) {
+  return (
+    <div className="space-y-4 px-4 py-6">
       <div>
-        <h2 className="text-lg font-semibold">Configuración</h2>
-        <p className="text-sm text-muted">skills y perfiles de agente</p>
+        <h2 className="text-lg font-semibold">
+          {pane === 'mcp' ? 'MCP' : pane === 'permisos' ? 'Permisos y proyecto' : 'Configuración'}
+        </h2>
+        <p className="text-sm text-muted">
+          {pane === 'mcp'
+            ? 'Servidores MCP conectados'
+            : pane === 'permisos'
+              ? 'Perfiles, carpeta de trabajo y skills de sistema'
+              : 'skills, perfiles, carpeta y MCP'}
+        </p>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <SkillsPane />
-        <ProfilesPane />
+        {(pane === 'all' || pane === 'permisos') && (
+          <>
+            {pane === 'all' && <SkillsPane />}
+            <ProfilesPane />
+            <ProjectPane />
+          </>
+        )}
+        {(pane === 'all' || pane === 'mcp') && <McpPane />}
       </div>
     </div>
   )

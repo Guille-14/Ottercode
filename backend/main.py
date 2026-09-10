@@ -1,16 +1,33 @@
 # OtterCode — fábrica de la aplicación FastAPI (estáticos, PWA, tokens)
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+from backend.env_settings import load_otter_env  # noqa: E402
+load_otter_env()
+import hmac
+import os
+from typing import Any
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from events import Route
+from backend.config import (
+    MOBILE_DIR, APP_VERSION, warn_ollama_speed_env, STATIC_DIR, _load_identity
+)
 from backend.profiles import _load_active_profile  # noqa: E402
 from backend.history import cleanup_empty_tasks, load_history  # noqa: E402
 from backend.db import _migrate_json_to_db, init_db  # noqa: E402
-from backend.config import APP_VERSION, MOBILE_DIR, STATIC_DIR, _load_identity  # noqa: E402
+from backend.config import APP_VERSION, MOBILE_DIR, STATIC_DIR, _load_identity, warn_ollama_speed_env  # noqa: E402
 from backend.config import _load_identity  # noqa
-from backend.db import *  # noqa: F401,F403
-from backend.history import *  # noqa: F401,F403
-from backend.profiles import *  # noqa: F401,F403
+from backend.db import (
+    init_db, _migrate_json_to_db
+)
+from backend.history import (
+    load_history, cleanup_empty_tasks
+)
+from backend.profiles import (
+    _ensure_default_profiles, _load_active_profile
+)
 from backend.profiles import _ensure_default_profiles, _load_active_profile  # noqa
-from backend.runtime import *  # noqa: F401,F403
 from backend.routes import router as api_router  # noqa
 from backend.vault import router as vault_router  # noqa
 
@@ -24,6 +41,9 @@ init_db()
 _migrate_json_to_db()
 _ensure_default_profiles()
 _load_active_profile()
+warn_ollama_speed_env()
+from backend.router import preload_router  # noqa: E402
+preload_router()
 
 
 app = FastAPI(title="OtterCode API", version=APP_VERSION)
@@ -34,7 +54,7 @@ app.add_middleware(
         "http://127.0.0.1", "http://127.0.0.1:*",
         "http://0.0.0.0", "http://0.0.0.0:*",
     ],
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|[a-z0-9.-]+\.e2b\.app)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -121,8 +141,8 @@ def mobile_manifest() -> JSONResponse:
         "scope": "/m",
         "display": "standalone",
         "orientation": "portrait",
-        "background_color": "#04070c",
-        "theme_color": "#070c14",
+        "background_color": "#FFFFFF",
+        "theme_color": "#FFFFFF",
         "lang": "es",
         "icons": [
             {"src": "/m/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
@@ -152,3 +172,5 @@ def mobile_icon_512() -> FileResponse:
 
 app.include_router(api_router)
 app.include_router(vault_router)
+from backend.neo_routes import router as neo_router  # noqa: E402
+app.include_router(neo_router)

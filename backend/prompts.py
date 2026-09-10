@@ -1,10 +1,42 @@
 # OtterCode — constructores de prompts, extracción de JSON y herramientas
 from __future__ import annotations
-from backend.config import *  # noqa: F401,F403
+import io
+import hmac
+import json
+import os
+import queue
+import re
+import shutil
+import sqlite3
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import httpx
+import requests
+import tools
+from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from events import SseEvent, sse, Route
+
+from backend.config import (
+    WORKSPACE_ROOT, REVIEWER_PER_FILE_LIMIT, REVIEWER_TOTAL_LIMIT, TOOL_RESULT_CONTEXT_LIMIT
+)
 from backend.runstate import OtterRun  # noqa: E402
 from backend.config import REVIEWER_PER_FILE_LIMIT, REVIEWER_TOTAL_LIMIT, TOOL_RESULT_CONTEXT_LIMIT, WORKSPACE_ROOT  # noqa: E402
 from backend.agents import Agent, DYNAMIC_AGENTS, _goal_block, get_agent  # noqa: E402
-from backend.agents import *  # noqa: F401,F403
+from backend.agents import (
+    Agent, DYNAMIC_AGENTS, get_agent, _goal_block
+)
 
 
 # Extracción de JSON (skills y perfiles de la Fábrica)
@@ -66,11 +98,71 @@ def _tool_from_decoded(obj: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+_HERMES_TOOL_RE = re.compile(
+    r"<tool_call>\s*([\s\S]*?)</tool_call>|<function=([A-Za-z0-9_]+)>([\s\S]*?)</function>",
+    re.IGNORECASE,
+)
+
+
+def _hermes_tool_call(text: str) -> Optional[Dict[str, Any]]:
+    """Protocolo Hermes / Nous-Hermes: <tool_call> JSON o <function=name>."""
+    t = text or ""
+    for m in _HERMES_TOOL_RE.finditer(t):
+        body, fname, fargs = m.group(1), m.group(2), m.group(3)
+        if fname:
+            args: Dict[str, Any] = {}
+            raw = (fargs or "").strip()
+            if raw.startswith("{"):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                except Exception:
+                    args = {}
+            else:
+                for line in raw.splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        args[k.strip()] = v.strip().strip('"')
+            if fname.strip():
+                return {"tool": fname.strip(), "arguments": args}
+        blob = (body or "").strip()
+        if not blob:
+            continue
+        try:
+            obj = json.loads(blob)
+        except Exception:
+            obj = {}
+            idx = blob.find("{")
+            if idx != -1:
+                try:
+                    obj, _ = _JSON_DECODER.raw_decode(blob[idx:])
+                except json.JSONDecodeError:
+                    obj = {}
+        call = _coerce_tool_call(obj) if obj else None
+        if call:
+            return call
+        if isinstance(obj, dict) and obj.get("name"):
+            raw_a = obj.get("arguments") or obj.get("parameters") or {}
+            if isinstance(raw_a, str):
+                try:
+                    raw_a = json.loads(raw_a)
+                except Exception:
+                    raw_a = {}
+            if not isinstance(raw_a, dict):
+                raw_a = {}
+            return {"tool": str(obj["name"]).strip(), "arguments": raw_a}
+    return None
+
+
 def _looks_like_tool_attempt(text: str) -> bool:
-    """Heurística: el agente intentó emitir un JSON de skill pero no fue parseable."""
-    if not (re.search(r'"tool"\s*:', text) or re.search(r'"tool_name"\s*:', text)):
+    """Heurística: el agente intentó emitir un JSON/XML de skill pero no fue parseable."""
+    t = text or ""
+    if "<tool_call>" in t.lower() or "<function=" in t.lower():
+        return True
+    if not (re.search(r'"tool"\s*:', t) or re.search(r'"tool_name"\s*:', t)):
         return False
-    return any(name in text for name in tools.TOOL_NAMES + ("finalizar",))
+    return any(name in t for name in tools.TOOL_NAMES + ("finalizar",))
 
 
 def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -102,11 +194,12 @@ def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 def extract_tool_call(text: str) -> Optional[Dict[str, Any]]:
     """Encuentra la primera llamada de herramienta válida (objeto O array).
 
-    Robustez: primero los bloques ```json (objeto o lista, los formatos que
-    exigen los prompts) y, si no hay, un escaneo con json.JSONDecoder.raw_decode
-    sobre cada '{' y cada '[' (las llaves dentro de cadenas de código NO
-    confunden al parser JSON real). Devuelve SIEMPRE {tool, arguments}.
+    Robustez: primero Hermes/XML, luego bloques ```json y raw_decode.
+    Devuelve SIEMPRE {tool, arguments}.
     """
+    hermes = _hermes_tool_call(text or "")
+    if hermes:
+        return hermes
     for match in _FENCED_TOOL_RE.finditer(text):
         start = match.end() - 1
         try:
@@ -189,6 +282,8 @@ def build_architect_prompt(task_text: str, roster: Optional[str] = None,
                            memory: str = "", goal: str = "") -> str:
     parts = [
         f"MISIÓN DEL EQUIPO (recibida del usuario):\n{task_text}",
+        "La misión es EXACTAMENTE lo que pidió el usuario. No la sustituyas "
+        "por un demo, una web de nutrias, ni un proyecto de marca OtterCode.",
         f"[AGENTES DINÁMICOS DISPONIBLES]\n{roster if roster is not None else build_dynamic_roster()}",
     ]
     goal_block = _goal_block(goal)
@@ -288,7 +383,8 @@ def build_developer_prompt(
         "# MISIÓN — BALSA OTTERCODE",
         "Eres el Programador de la balsa. Implementa la misión escribiendo los "
         "archivos con write_file (usa mkdir para estructura y tree/list_dir si "
-        "necesitas revisar el estado).",
+        "necesitas revisar el estado). El tema lo marca el usuario: si pidió "
+        "Hermes Agent, NO hagas una web de nutrias ni un demo de OtterCode.",
         f"[MISIÓN DEL USUARIO]\n{task_text}",
     ]
     if goal:
@@ -308,31 +404,58 @@ def build_developer_prompt(
 
 
 def build_reviewer_prompt(run: "OtterRun", plan: str) -> str:
-    files_text = run.executor.read_workspace_for_review(
-        REVIEWER_PER_FILE_LIMIT, REVIEWER_TOTAL_LIMIT
-    )
+    """No volcar el workspace entero: eso llena n_ctx (48k vs 18k)."""
+    inventory: List[str] = []
+    try:
+        for f in run.executor.list_workspace()[:24]:
+            p = f.get("path") if isinstance(f, dict) else str(f)
+            sz = f.get("size") if isinstance(f, dict) else 0
+            if not p or str(p).startswith("."):
+                continue
+            inventory.append(f"- {p} ({sz} B)")
+    except Exception:
+        pass
     parts = [
         "# AUDITORÍA — BALSA OTTERCODE",
-        f"[MISIÓN DEL USUARIO]\n{run.task_text}",
+        f"[MISIÓN DEL USUARIO]\n{(run.task_text or '')[:800]}",
     ]
     if getattr(run, "goal", ""):
         parts.append(_goal_block(run.goal))
     if plan:
-        parts.append(f"[PLAN DEL ARQUITECTO]\n{plan}")
-    parts.append(f"[CÓDIGO ACTUAL EN EL WORKSPACE]\n{files_text or '(workspace vacío: no se escribió nada)'}")
+        parts.append(f"[PLAN DEL ARQUITECTO]\n{plan[:1500]}")
     parts.append(
-        "Instrucciones: inspecciona el código (read_file/tree) y ejecuta tests "
-        "razonables con execute_bash (p. ej. python3 -m py_compile X.py, "
-        "node --check X.js). Después dictamina según tu REGRA DE HIERRO."
+        "[ARCHIVOS EN DISCO — lee con read_file lo que necesites; "
+        "NO se pega el código completo aquí]\n"
+        + ("\n".join(inventory) if inventory else "(vacío)")
+    )
+    parts.append(
+        "Inspecciona con tree/read_file (trozos). Dictamina breve. "
+        "No copies archivos enteros en tu respuesta."
     )
     return "\n\n".join(parts)
+
+
+def _workspace_inventory(run: "OtterRun", limit: int = 32) -> str:
+    lines: List[str] = []
+    try:
+        for f in run.executor.list_workspace()[:limit]:
+            p = f.get("path") if isinstance(f, dict) else str(f)
+            sz = f.get("size") if isinstance(f, dict) else 0
+            if not p or str(p).startswith("."):
+                continue
+            lines.append(f"- {p} ({sz} B)")
+    except Exception:
+        pass
+    return "\n".join(lines) if lines else "(workspace vacío)"
+
+
+def _workspace_inventory_lines(run: "OtterRun", limit: int = 32) -> str:
+    return _workspace_inventory(run, limit=limit)
 
 
 def build_chat_prompt(run: "OtterRun", task_text: Optional[str] = None) -> str:
     start = get_agent(run.start_agent)
     txt = task_text if task_text is not None else run.task_text
-    # v4.3 · el modo Claude Code lleva su propio marcador (el modelo así
-    # sabe que es EL agente con tools, no un chat pasivo)
     hdr = ("# AGENTE OTTER — MODO CLAUDE CODE" if run.start_agent == "agent"
            else "# CHAT DIRECTO — BALSA OTTERCODE")
     parts = [
@@ -342,6 +465,52 @@ def build_chat_prompt(run: "OtterRun", task_text: Optional[str] = None) -> str:
         "workspace, usa tus skills.",
         f"USUARIO:\n{txt}",
     ]
+    inv_always = _workspace_inventory(run)
+    if inv_always and inv_always != "(workspace vacío)":
+        parts.append(
+            "# ARCHIVOS EN DISCO (YA EXISTEN: edítalos, no los recrees)\n"
+            f"{inv_always}\n"
+            "write_file SOLO si el path no existe. Si existe: edit_file/append_file."
+        )
+    if getattr(run, "continue_task", ""):
+        inv = _workspace_inventory(run)
+        orig = ""
+        try:
+            meta_path = WORKSPACE_ROOT / str(run.continue_task) / "ottercode_transcript.json"
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                orig = str((data.get("meta") or {}).get("task") or "")[:800]
+        except Exception:
+            orig = ""
+        tails: List[str] = []
+        try:
+            for f in run.executor.list_workspace()[:12]:
+                p = str(f.get("path") if isinstance(f, dict) else f)
+                if not p or p.startswith(".") or not p.lower().endswith(
+                    (".html", ".htm", ".js", ".css", ".py", ".md")
+                ):
+                    continue
+                try:
+                    body = (run.workdir / p).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if len(body) < 40:
+                    continue
+                tails.append(f"--- cola de {p} ({len(body)} chars) ---\n{body[-900:]}")
+        except Exception:
+            pass
+        parts.append(
+            "# HILO CONTINUADO — EDITA, NO REGENERES\n"
+            "Los archivos YA EXISTEN. PROHIBIDO write_file sobre ellos "
+            "(borra el trabajo y gasta tokens). "
+            "• Línea mal / trozo concreto → edit_file (old_string exacto).\n"
+            "• Añadir al final / seguir el HTML → append_file (≤150 líneas).\n"
+            "• Añadir al principio → edit_file del bloque inicial, no reescribir todo.\n"
+            "NO crees index.html nuevo ni una web de nutrias.\n"
+            + (f"MISIÓN ORIGINAL:\n{orig}\n" if orig else "")
+            + f"ARCHIVOS EN DISCO:\n{inv}\n"
+            + ("\n".join(tails) if tails else "")
+        )
     if getattr(run, "memory_block", ""):
         parts.append(
             "# MEMORIA PERSISTENTE (tu cerebro Obsidian)\n"
@@ -354,30 +523,43 @@ def build_chat_prompt(run: "OtterRun", task_text: Optional[str] = None) -> str:
 
 def _prev_conversation_block(task_id: str, max_entries: int = 16,
                              max_chars: int = 700) -> str:
-    """🧵 Continuidad conversacional: bloque con las últimas entradas
-    user/agent del transcript de la misión anterior, para que el agente
-    itere sobre el hilo previo en vez de empezar de cero."""
+    """🧵 Continuidad: el JSON en disco es {meta, transcript}, no una lista."""
     path = WORKSPACE_ROOT / str(task_id) / "ottercode_transcript.json"
     try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return ""
-    if not isinstance(entries, list):
+    meta: Dict[str, Any] = {}
+    entries: List[Any] = []
+    if isinstance(data, dict):
+        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+        raw = data.get("transcript")
+        entries = raw if isinstance(raw, list) else []
+    elif isinstance(data, list):
+        entries = data
+    else:
         return ""
     conv = [e for e in entries
             if isinstance(e, dict) and e.get("kind") in ("user", "agent")]
-    if not conv:
-        return ""
     lines = ["# CONVERSACIÓN PREVIA CON ESTE USUARIO "
              "(mismo proyecto; los archivos ya están en tu workspace)"]
+    orig = str(meta.get("task") or "").strip()
+    if orig:
+        lines.append(f"<MISIÓN ORIGINAL>: {orig[:800]}")
+    if not conv and not orig:
+        return ""
     for e in conv[-max_entries:]:
         who = "<USUARIO>" if e.get("kind") == "user" else "<OTTER>"
-        txt = str(e.get("text") or "").strip()
+        txt = str(e.get("text") or e.get("content") or "").strip()
+        if not txt:
+            continue
         if len(txt) > max_chars:
             txt = txt[:max_chars] + "…"
         lines.append(f"{who}: {txt}")
-    lines.append("El usuario continúa la conversación: itera sobre lo que ya hay "
-                 "(los archivos están en tu workspace), no empieces de cero.")
+    lines.append(
+        "El usuario continúa: itera sobre lo que ya hay. "
+        "no empieces de cero. NO inventes una web de nutrias ni un demo."
+    )
     return "\n".join(lines)
 
 

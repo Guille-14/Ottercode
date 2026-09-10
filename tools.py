@@ -67,8 +67,8 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     # ── FS ──
     "read_file":    {"cat": "FS", "writes_fs": False, "desc": "Lee un archivo del workspace",
                      "example": '{"tool": "read_file", "arguments": {"filepath": "ruta/relativa"}}'},
-    "write_file":   {"cat": "FS", "writes_fs": True, "desc": "Crea o sobrescribe un archivo (contenido COMPLETO)",
-                     "example": '{"tool": "write_file", "arguments": {"filepath": "ruta/relativa", "content": "CONTENIDO"}}'},
+    "write_file":   {"cat": "FS", "writes_fs": True, "desc": "Crea un archivo NUEVO (contenido completo). PROHIBIDO si el archivo ya existe: usa edit_file",
+                     "example": '{"tool": "write_file", "arguments": {"filepath": "ruta/nueva.py", "content": "CONTENIDO"}}'},
     "append_file":  {"cat": "FS", "writes_fs": True, "desc": "AÑADE contenido al final de un archivo (lo crea si no existe). Para archivos grandes: escribe POR PARTES",
                      "example": '{"tool": "append_file", "arguments": {"filepath": "index.html", "content": "<!-- siguiente parte -->"}}'},
     "mkdir":        {"cat": "FS", "writes_fs": True, "desc": "Crea un directorio (con padres si hacen falta)",
@@ -156,6 +156,10 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     # ── Claude Code: edición quirúrgica y búsqueda ──
     "edit_file":    {"cat": "FS", "writes_fs": True, "desc": "Edita un archivo reemplazando old_string por new_string (debe ser único)",
                      "example": '{"tool": "edit_file", "arguments": {"filepath": "app.py", "old_string": "def vieja():", "new_string": "def nueva():"}}'},
+    "apply_patch":  {"cat": "FS", "writes_fs": True, "desc": "Aplica unified diff o bloques SEARCH/REPLACE sobre un archivo",
+                     "example": '{"tool": "apply_patch", "arguments": {"filepath": "app.py", "patch": "<<<<<<< SEARCH\\nfoo\\n=======\\nbar\\n>>>>>>> REPLACE"}}'},
+    "git_commit":   {"cat": "Código", "writes_fs": True, "desc": "Commit en el workdir (message, paths opcionales)",
+                     "example": '{"tool": "git_commit", "arguments": {"message": "feat: x"}}'},
     "grep_search":  {"cat": "FS", "writes_fs": False, "desc": "Busca una regex en los archivos del workspace (estilo grep -rn)",
                      "example": '{"tool": "grep_search", "arguments": {"pattern": "TODO|FIXME", "path": "."}}'},
     "glob_files":   {"cat": "FS", "writes_fs": False, "desc": "Encuentra archivos por patrón glob (**/*.py)",
@@ -170,6 +174,16 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                         "example": '{"tool": "semantic_search", "arguments": {"query": "autenticación de usuarios", "top_k": 4}}'},
     "index_workspace": {"cat": "Memoria", "writes_fs": False, "desc": "Indexa semánticamente todos los archivos de código del proyecto para RAG",
                         "example": '{"tool": "index_workspace", "arguments": {}}'},
+    "memory": {"cat": "Memoria", "writes_fs": True, "desc": "Memoria Hermes: add|replace|remove sobre memory|user",
+               "example": '{"tool": "memory", "arguments": {"action": "add", "target": "memory", "text": "prefiero pytest"}}'},
+    "use_skill": {"cat": "Memoria", "writes_fs": False, "desc": "Invoca una SKILL.md de ~/.ottercode/skills",
+                  "example": '{"tool": "use_skill", "arguments": {"name": "mi-skill"}}'},
+    "cronjob": {"cat": "Plan", "writes_fs": False, "desc": "CRUD de cron: create|list|update|pause|resume|run|remove",
+                "example": '{"tool": "cronjob", "arguments": {"action": "list"}}'},
+    "delegate_task": {"cat": "Plan", "writes_fs": False, "desc": "Lanza un subagente en background (cola GPU)",
+                      "example": '{"tool": "delegate_task", "arguments": {"task": "revisa tests"}}'},
+    "session_search": {"cat": "Memoria", "writes_fs": False, "desc": "Busca mensajes reales (FTS5) en sesiones",
+                       "example": '{"tool": "session_search", "arguments": {"query": "oauth"}}'},
 }
 
 # Nombres alternativos aceptados (compatibilidad / slash commands)
@@ -484,9 +498,64 @@ class ToolExecutor:
         if content is None:
             raise ToolError("El campo 'content' no puede ser null.")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(content), encoding="utf-8")
+        old = ""
+        existed = path.exists() and path.is_file()
+        if existed:
+            try:
+                old = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                old = ""
+        new = str(content)
+        allow_ow = os.environ.get("OTTERCODE_ALLOW_OVERWRITE", "0").strip().lower() in ("1", "true", "yes")
+        if (not existed) and path.suffix.lower() in {".html", ".htm"}:
+            others: List[str] = []
+            try:
+                for p in self.workdir.rglob("*"):
+                    if not p.is_file() or p.suffix.lower() not in {".html", ".htm"}:
+                        continue
+                    if p.name.startswith(".") or "node_modules" in p.parts:
+                        continue
+                    others.append(str(p.relative_to(self.workdir)))
+                    if len(others) >= 8:
+                        break
+            except OSError:
+                others = []
+            if others:
+                raise ToolError(
+                    "Ya hay HTML en el workspace ("
+                    + ", ".join(others)
+                    + "). PROHIBIDO crear otro .html. "
+                    "Usa read_file + edit_file (o append_file) sobre el archivo existente."
+                )
+        if existed and old.strip() and len(old) > 80 and not allow_ow:
+            snippet = "\n".join(old.splitlines()[:50])[:2500]
+            raise ToolError(
+                json.dumps({
+                    "status": "error",
+                    "reason": "file_exists_use_edit_file",
+                    "path": str(path.relative_to(self.workdir)),
+                    "file_snippet": snippet,
+                    "hint": (
+                        "PROHIBIDO write_file sobre un archivo que ya existe "
+                        "(NUM_PREDICT trunca y el disco no cambia). "
+                        "Usa edit_file con old_string EXACTO de file_snippet."
+                    ),
+                }, ensure_ascii=False)
+            )
+        path.write_text(new, encoding="utf-8")
         rel = path.relative_to(self.workdir)
-        return f"OK: {len(str(content))} caracteres escritos en {rel}"
+        if not existed or not old:
+            return f"OK: {len(new)} caracteres escritos en {rel}"
+        diff_lines = list(difflib.unified_diff(
+            old.splitlines(), new.splitlines(),
+            fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm="", n=2,
+        ))
+        if not diff_lines:
+            return f"OK: {len(new)} caracteres escritos en {rel} (sin cambios)"
+        body = "\n".join(diff_lines[:200])
+        if len(diff_lines) > 200:
+            body += "\n[…diff truncado…]"
+        return f"OK: {len(new)} caracteres escritos en {rel}\n\n```diff\n{body}\n```"
 
     def append_file(self, filepath: str, content: str) -> str:
         """AÑADE contenido al final del archivo (lo crea si no existe).
@@ -1118,6 +1187,8 @@ class ToolExecutor:
         patch: Optional[str] = None,
     ) -> str:
         """Edición quirúrgica resiliente: soporta rangos de líneas, diffs unificados o reemplazo exacto/fuzzy."""
+        if patch:
+            return self.apply_patch(filepath, str(patch))
         target = self.resolve_safe(filepath)
         self._check_writable("edit_file")
         if not target.exists():
@@ -1173,16 +1244,39 @@ class ToolExecutor:
                 new_text = norm_text.replace(norm_old, replacement_text, 1)
             else:
                 # Fuzzy matching para tolerar ligeras diferencias de indentación del LLM
-                matcher = difflib.SequenceMatcher(None, norm_text, norm_old)
-                match = matcher.find_longest_match(0, len(norm_text), 0, len(norm_old))
-                if match.size > len(norm_old) * 0.85:
-                    matched_slice = norm_text[match.a:match.a + match.size]
-                    new_text = norm_text[:match.a] + replacement_text + norm_text[match.a + match.size:]
+                collapsed = re.sub(r"\s+", " ", norm_text)
+                collapsed_old = re.sub(r"\s+", " ", norm_old)
+                if collapsed_old and collapsed_old in collapsed:
+                    # Reinyectar el bloque real más cercano (primera línea del old)
+                    first = (norm_old.splitlines() or [""])[0].strip()
+                    idx = next((i for i, ln in enumerate(text.splitlines()) if first and first in ln), -1)
+                    if idx >= 0:
+                        block = "\n".join(text.splitlines()[idx:idx + max(1, len(norm_old.splitlines()))])
+                        new_text = text.replace(block, replacement_text, 1)
+                    else:
+                        new_text = None
                 else:
-                    head = text[:300].strip()
-                    raise ToolError(
-                        f"'old_string' no aparece en {filepath} (ni con coincidencia difusa). Inicio del archivo:\n{head}"
-                    )
+                    new_text = None
+                if new_text is None:
+                    matcher = difflib.SequenceMatcher(None, norm_text, norm_old)
+                    match = matcher.find_longest_match(0, len(norm_text), 0, len(norm_old))
+                    thresh = max(12, int(len(norm_old) * 0.72))
+                    if match.size >= thresh:
+                        new_text = norm_text[:match.a] + replacement_text + norm_text[match.a + match.size:]
+                    else:
+                        snippet = "\n".join(text.splitlines()[:50])[:2500]
+                        raise ToolError(
+                            json.dumps({
+                                "status": "error",
+                                "reason": "old_string not found",
+                                "path": filepath,
+                                "file_snippet": snippet,
+                                "hint": (
+                                    "Copia old_string EXACTO de file_snippet (indentación y saltos) "
+                                    "y reintenta edit_file. No uses write_file."
+                                ),
+                            }, ensure_ascii=False)
+                        )
 
         target.write_text(new_text, encoding="utf-8")
         diff_lines = list(difflib.unified_diff(
@@ -1193,6 +1287,88 @@ class ToolExecutor:
         if len(diff_lines) > 40:
             diff_txt += "\n[…diff truncado…]"
         return f"OK: 1 reemplazo(s) en {filepath}\n\n```diff\n{diff_txt}\n```"
+
+
+    def apply_patch(self, filepath: str, patch: str) -> str:
+        """Aplica unified diff o bloques Aider SEARCH/REPLACE."""
+        self._check_writable("apply_patch")
+        raw = str(patch or "")
+        if not raw.strip():
+            raise ToolError("El campo 'patch' está vacío.")
+        path = self._safe(filepath)
+        existed = path.is_file()
+        text = path.read_text(encoding="utf-8", errors="replace") if existed else ""
+        new_text = None
+        if "<<<<<<< SEARCH" in raw:
+            blocks = re.findall(
+                r"<<<<<<< SEARCH\n(.*?)=======\n(.*?)>>>>>>> REPLACE",
+                raw, re.S,
+            )
+            if not blocks:
+                raise ToolError("Bloques SEARCH/REPLACE inválidos.")
+            new_text = text
+            for search, repl in blocks:
+                search = search.rstrip("\n")
+                repl = repl.rstrip("\n")
+                if not existed and not search.strip():
+                    new_text = (new_text + ("\n" if new_text else "") + repl)
+                    continue
+                n = new_text.count(search)
+                if n == 0:
+                    raise ToolError(
+                        f"SEARCH no encontrado en {filepath}. Contexto inicial:\n{text[:400]}"
+                    )
+                if n > 1:
+                    raise ToolError(
+                        f"SEARCH aparece {n} veces en {filepath}; no adivino. Añade contexto."
+                    )
+                new_text = new_text.replace(search, repl, 1)
+        else:
+            # unified diff: extrae líneas + / - del hunk
+            plus, minus = [], []
+            for line in raw.splitlines():
+                if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+                    continue
+                if line.startswith("+"):
+                    plus.append(line[1:])
+                elif line.startswith("-"):
+                    minus.append(line[1:])
+            old_chunk = "\n".join(minus)
+            new_chunk = "\n".join(plus)
+            if not existed and not old_chunk.strip():
+                new_text = new_chunk
+            elif old_chunk and old_chunk in text:
+                if text.count(old_chunk) > 1:
+                    raise ToolError("El hunk - aparece más de una vez; no adivino.")
+                new_text = text.replace(old_chunk, new_chunk, 1)
+            else:
+                raise ToolError("No pude aplicar el unified diff (hunk no coincide).")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(new_text, encoding="utf-8")
+        diff_lines = list(difflib.unified_diff(
+            text.splitlines(), new_text.splitlines(),
+            fromfile=f"a/{filepath}", tofile=f"b/{filepath}", lineterm="", n=2,
+        ))
+        body = "\n".join(diff_lines[:80]) or "(sin cambios de línea)"
+        return f"OK: patch aplicado a {filepath}\n\n```diff\n{body}\n```"
+
+    def git_commit(self, message: str, paths: Any = None) -> str:
+        msg = str(message or "").strip()
+        if not msg:
+            raise ToolError("message vacío.")
+        low = msg.lower()
+        if "--amend" in low or "push --force" in low or " -f" in f" {low}":
+            raise ToolError("Denegado: amend / force no permitidos.")
+        files = []
+        if isinstance(paths, list):
+            files = [str(p) for p in paths if str(p).strip()]
+        if files:
+            for f in files:
+                self._safe(f)
+            self._git("add", "--", *files)
+        else:
+            self._git("add", "-A")
+        return self._git("commit", "-m", msg)
 
     def semantic_search(self, query: str, top_k: int = 4) -> str:
         """Búsqueda semántica usando embeddings vectoriales en sqlite-vec."""
@@ -1275,6 +1451,32 @@ class ToolExecutor:
                         break
         return "\n".join(hits) if hits else f"(sin coincidencias para /{pat}/)"
 
+    def _gitignore_specs(self) -> List[str]:
+        specs: List[str] = []
+        gi = self.workdir / ".gitignore"
+        if gi.is_file():
+            try:
+                for line in gi.read_text(encoding="utf-8", errors="replace").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        specs.append(line.rstrip("/"))
+            except OSError:
+                pass
+        return specs
+
+    def _is_gitignored(self, p: Path) -> bool:
+        import fnmatch
+        try:
+            rel = str(p.relative_to(self.workdir)).replace("\\", "/")
+        except ValueError:
+            return False
+        for spec in self._gitignore_specs():
+            if fnmatch.fnmatch(rel, spec) or fnmatch.fnmatch(p.name, spec) or fnmatch.fnmatch(rel, spec + "/*"):
+                return True
+            if any(fnmatch.fnmatch(part, spec) for part in Path(rel).parts):
+                return True
+        return False
+
     def glob_files(self, pattern: str = "**/*", max: int = GLOB_MAX_FILES) -> str:
         """Lista archivos por patrón glob relativo al workspace."""
         pat = str(pattern or "**/*").lstrip("/\\") or "**/*"
@@ -1292,6 +1494,8 @@ class ToolExecutor:
                 break
             if p.is_symlink() or any(part in self._SKIP_DIRS for part in p.parts):
                 continue
+            if self._is_gitignored(p):
+                continue
             if p.is_dir():
                 out.append(f"📁 {p.relative_to(self.workdir)}/")
             elif p.is_file():
@@ -1301,23 +1505,59 @@ class ToolExecutor:
     # ----------------------------- plan de misión ----------------------------
 
     def todo_write(self, todos: Any) -> str:
-        """Persiste el plan de la misión (lista de pasos con estado y agente)."""
+        """Persiste el plan de la misión. Completado exige evidencia (test/archivo)."""
         self._check_writable("todo_write")
         items = todos if isinstance(todos, list) else []
+        prev: List[Dict[str, Any]] = []
+        p = self.workdir / TODO_FILE
+        if p.exists():
+            try:
+                prev = json.loads(p.read_text(encoding="utf-8")) or []
+            except (json.JSONDecodeError, OSError):
+                prev = []
+        prev_by = {str(it.get("content", "")): it for it in prev if isinstance(it, dict)}
         clean = []
+        rejected = []
         for it in items[:50]:
             if isinstance(it, dict):
+                content = str(it.get("content", ""))[:300]
+                status = str(it.get("status", "pending")).lower().strip()
+                if status in ("done", "complete", "completed", "completado", "x"):
+                    status = "done"
+                elif status in ("in_progress", "doing", "en_curso", "en curso", "~"):
+                    status = "in_progress"
+                else:
+                    status = "pending"
+                evidence = str(it.get("evidence") or it.get("verificacion") or "").strip()
+                if status in ("done", "completed") and len(evidence) < 8 and prev_by.get(content):
+                    old = prev_by.get(content) or {}
+                    if str(old.get("status")) == "completed" and old.get("evidence"):
+                        evidence = str(old.get("evidence"))
+                    else:
+                        rejected.append(content or "?")
+                        status = "in_progress"
+                        evidence = ""
                 clean.append({
-                    "content": str(it.get("content", ""))[:300],
-                    "status": str(it.get("status", "pending")),
+                    "content": content,
+                    "status": status,
                     "agent": str(it.get("agent", "")),
+                    "evidence": evidence[:500],
                 })
             elif isinstance(it, str) and it.strip():
-                clean.append({"content": it.strip()[:300], "status": "pending", "agent": ""})
-        (self.workdir / TODO_FILE).write_text(
-            json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        return f"OK: plan guardado con {len(clean)} paso(s)."
+                clean.append({"content": it.strip()[:300], "status": "pending", "agent": "", "evidence": ""})
+        p.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            from backend.runstate import append_checkpoint
+            dummy = type("R", (), {"task_id": self.workdir.name, "start_agent": "", "files_report": []})()
+            append_checkpoint(dummy, kind="todo", done=f"{len(clean)} ítems",
+                              extra={"todos": clean})
+        except Exception:
+            pass
+        msg = f"OK: plan guardado con {len(clean)} paso(s)."
+        if rejected:
+            msg += (" Completado RECHAZADO (sin evidencia de test/archivo): "
+                    + ", ".join(rejected[:5]))
+        return msg
 
     def todo_read(self) -> str:
         p = self.workdir / TODO_FILE
@@ -1330,7 +1570,10 @@ class ToolExecutor:
         lines = []
         for t in data:
             who = f"[{t['agent']}] " if t.get("agent") else ""
-            lines.append(f"[{t.get('status', '?'):>9}] {who}{t.get('content', '')}")
+            st = str(t.get("status", "?"))
+            if st == "completed":
+                st = "done"
+            lines.append(f"[{st}] {who}{t.get('content', '')}")
         return "\n".join(lines) if lines else "(plan vacío)"
 
     # --------------------------------- web API -------------------------------
@@ -1691,7 +1934,15 @@ class ToolExecutor:
         canonical = resolve_name(tool)
         try:
             if canonical == "read_file":
-                output = self.read_file(args.get("filepath", ""))
+                try:
+                    _off = int(args.get("offset") or 1)
+                except (TypeError, ValueError):
+                    _off = 1
+                output = self.read_file(
+                    args.get("filepath", ""),
+                    offset=_off,
+                    limit=args.get("limit") or args.get("max_lines"),
+                )
             elif canonical == "write_file":
                 output = self.write_file(args.get("filepath", ""), args.get("content", ""))
             elif canonical == "append_file":
@@ -1748,6 +1999,10 @@ class ToolExecutor:
                 output = self.vault_read(args.get("path", ""))
             elif canonical == "vault_write":
                 output = self.vault_write(args.get("path", ""), args.get("content", ""))
+            elif canonical == "apply_patch":
+                output = self.apply_patch(args.get("filepath", ""), args.get("patch", ""))
+            elif canonical == "git_commit":
+                output = self.git_commit(args.get("message", ""), args.get("paths"))
             elif canonical == "edit_file":
                 output = self.edit_file(
                     filepath=args.get("filepath", ""),
@@ -1798,6 +2053,57 @@ class ToolExecutor:
                 output = self.model_list()
             elif canonical == "ollama_consult":
                 output = self.ollama_consult(args.get("model", ""), args.get("prompt", ""))
+            elif canonical == "memory":
+                from backend.memory_md import memory_tool
+                output = json.dumps(memory_tool(
+                    str(args.get("action") or "add"),
+                    str(args.get("target") or "memory"),
+                    str(args.get("text") or ""),
+                    str(args.get("old_text") or ""),
+                ), ensure_ascii=False)
+            elif canonical == "use_skill":
+                from backend.skill_creator import list_home_skills
+                name = str(args.get("name") or "")
+                hit = next((s for s in list_home_skills() if s["name"].lower() == name.lower()), None)
+                output = (hit.get("body") if hit and hit.get("enabled") else f"skill '{name}' no disponible")
+            elif canonical == "cronjob":
+                from backend.cron import jobs as CJ
+                from backend.cron.scheduler import run_now
+                act = str(args.get("action") or "list").lower()
+                ident = str(args.get("id") or args.get("name") or "")
+                if act == "list":
+                    output = json.dumps(CJ.list_jobs(), ensure_ascii=False)[:8000]
+                elif act == "create":
+                    output = json.dumps(CJ.create_job(args, from_agent=True), ensure_ascii=False)
+                elif act == "pause":
+                    output = json.dumps(CJ.pause_job(ident))
+                elif act == "resume":
+                    output = json.dumps(CJ.resume_job(ident))
+                elif act == "remove":
+                    output = json.dumps(CJ.remove_job(ident))
+                elif act == "run":
+                    output = json.dumps(run_now(ident))
+                elif act == "update":
+                    output = json.dumps(CJ.update_job(ident, args))
+                else:
+                    output = "acción cron desconocida"
+            elif canonical == "delegate_task":
+                from backend.subagents import delegate_task
+                output = json.dumps(delegate_task(
+                    str(args.get("task") or ""),
+                    str(args.get("context") or ""),
+                    str(args.get("model") or ""),
+                    list(args.get("skills") or []),
+                    list(args.get("tools") or []),
+                    int(args.get("timeout_seconds") or 300),
+                ), ensure_ascii=False)
+            elif canonical == "session_search":
+                from backend.db import session_search
+                output = json.dumps(session_search(
+                    str(args.get("query") or ""),
+                    int(args.get("limit") or 20),
+                    args.get("session_id"),
+                ), ensure_ascii=False)[:8000]
             else:
                 return self._result(
                     False,
@@ -1819,14 +2125,21 @@ class ToolExecutor:
     def list_workspace(self) -> List[Dict[str, Any]]:
         """Lista los archivos del workspace (relativos) con su tamaño."""
         files: List[Dict[str, Any]] = []
+        skip_parts = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache"}
         for path in sorted(self.workdir.rglob("*")):
             if not path.is_file() or path.name == "ottercode_transcript.json":
+                continue
+            if any(part in skip_parts for part in path.parts):
                 continue
             try:
                 size = path.stat().st_size
             except OSError:
                 continue
-            files.append({"path": str(path.relative_to(self.workdir)), "size": size})
+            rel = str(path.relative_to(self.workdir))
+            base = path.name
+            if base.startswith(".otter") or base == "ottercode_transcript.json":
+                continue
+            files.append({"path": rel, "size": size})
         return files
 
     def read_workspace_for_review(
@@ -1951,20 +2264,159 @@ if __name__ == "__main__":  # sanity check manual
         print(ro.dispatch("write_file", {"filepath": "x.txt", "content": "x"}))
         print(ro.dispatch("python_exec", {"code": "print(1)"}))
 
-def get_ollama_tools() -> List[Dict[str, Any]]:
-    """Convierte el registro de TOOLS al formato de herramientas de Ollama."""
-    ollama_tools = []
-    for name, info in TOOLS.items():
+def _prop(typ: str, desc: str = "", **extra: Any) -> Dict[str, Any]:
+    d: Dict[str, Any] = {"type": typ}
+    if desc:
+        d["description"] = desc
+    d.update(extra)
+    return d
+
+
+_TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
+    "read_file": {
+        "properties": {
+            "filepath": _prop("string", "Ruta relativa"),
+            "offset": _prop("integer", "Primera línea (1-based)"),
+            "limit": _prop("integer", "Máximo de líneas"),
+        },
+        "required": ["filepath"],
+    },
+    "write_file": {
+        "properties": {
+            "filepath": _prop("string"),
+            "content": _prop("string", "Contenido completo (solo archivos NUEVOS cortos)"),
+        },
+        "required": ["filepath", "content"],
+    },
+    "append_file": {
+        "properties": {"filepath": _prop("string"), "content": _prop("string")},
+        "required": ["filepath", "content"],
+    },
+    "edit_file": {
+        "properties": {
+            "filepath": _prop("string"),
+            "old_string": _prop("string", "Texto exacto a reemplazar (único)"),
+            "new_string": _prop("string"),
+        },
+        "required": ["filepath", "old_string", "new_string"],
+    },
+    "apply_patch": {
+        "properties": {
+            "filepath": _prop("string"),
+            "patch": _prop("string", "Unified diff o bloques SEARCH/REPLACE"),
+        },
+        "required": ["filepath", "patch"],
+    },
+    "mkdir": {"properties": {"path": _prop("string")}, "required": ["path"]},
+    "list_dir": {"properties": {"path": _prop("string")}, "required": []},
+    "tree": {
+        "properties": {"path": _prop("string"), "max_depth": _prop("integer")},
+        "required": [],
+    },
+    "grep_search": {
+        "properties": {"pattern": _prop("string"), "path": _prop("string")},
+        "required": ["pattern"],
+    },
+    "glob_files": {
+        "properties": {"pattern": _prop("string")},
+        "required": ["pattern"],
+    },
+    "execute_bash": {
+        "properties": {"cmd": _prop("string", "Comando en el workdir")},
+        "required": ["cmd"],
+    },
+    "python_exec": {
+        "properties": {"code": _prop("string")},
+        "required": ["code"],
+    },
+    "git_status": {"properties": {}, "required": []},
+    "git_diff": {
+        "properties": {"staged": _prop("boolean")},
+        "required": [],
+    },
+    "git_log": {
+        "properties": {"max": _prop("integer")},
+        "required": [],
+    },
+    "git_commit": {
+        "properties": {
+            "message": _prop("string"),
+            "paths": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["message"],
+    },
+    "todo_write": {
+        "properties": {
+            "todos": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": "Lista {content, status, agent, evidence}",
+            },
+        },
+        "required": ["todos"],
+    },
+    "todo_read": {"properties": {}, "required": []},
+    "semantic_search": {
+        "properties": {"query": _prop("string"), "top_k": _prop("integer")},
+        "required": ["query"],
+    },
+    "index_workspace": {"properties": {}, "required": []},
+    "web_search": {
+        "properties": {"query": _prop("string")},
+        "required": ["query"],
+    },
+    "web_fetch": {
+        "properties": {"url": _prop("string")},
+        "required": ["url"],
+    },
+    "finalizar": {
+        "properties": {"resumen": _prop("string")},
+        "required": [],
+    },
+}
+
+
+def get_ollama_tools(allowed: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Schemas OpenAI/Ollama. Si `allowed` se pasa, SOLO esas tools + finalizar."""
+    ollama_tools: List[Dict[str, Any]] = []
+    if allowed is None:
+        names = list(TOOLS.keys())
+    else:
+        names = []
+        seen = set()
+        for n in allowed:
+            n = resolve_name(str(n or "").strip())
+            if n and n not in seen:
+                seen.add(n)
+                names.append(n)
+        if "finalizar" not in seen:
+            names.append("finalizar")
+    for name in names:
+        info = TOOLS.get(name) or {}
+        schema = _TOOL_SCHEMAS.get(name) or {}
+        props = dict(schema.get("properties") or {})
+        required = list(schema.get("required") or [])
+        desc = info.get("desc") or name
         ollama_tools.append({
             "type": "function",
             "function": {
                 "name": name,
-                "description": info.get("desc", ""),
+                "description": desc,
                 "parameters": {
                     "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
+                    "properties": props,
+                    "required": required,
+                },
+            },
         })
+    try:
+        if mcp_client.mcp_loop.is_ready():
+            mgr = mcp_client.get_manager()
+            extra = getattr(mgr, "openai_tools", None) or getattr(mgr, "list_openai_tools", None)
+            if callable(extra):
+                extra = extra()
+            if isinstance(extra, list):
+                ollama_tools.extend(extra)
+    except Exception:
+        pass
     return ollama_tools

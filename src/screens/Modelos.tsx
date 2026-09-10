@@ -3,8 +3,11 @@
 // (borrar / copiar).
 import { useEffect, useRef, useState } from 'react'
 import { Box, CloudDownload, Trash2, Copy, Cpu } from 'lucide-react'
-import { api, type Pulse } from '../api'
+import { api, fetchWithAuth, type Pulse } from '../api'
+import { useUi } from '../store'
 import { Badge, Card } from '../ui'
+import ConfirmDialog from '../ConfirmDialog'
+import UndoToast from '../UndoToast'
 
 function fmtBytes(n?: number): string {
   if (!n) return '—'
@@ -20,6 +23,13 @@ export default function Modelos() {
   const [pulling, setPulling] = useState(false)
   const [progress, setProgress] = useState<{ pct: number; status: string } | null>(null)
   const pullAbort = useRef<(() => void) | null>(null)
+  const [confirmName, setConfirmName] = useState<string | null>(null)
+  const [undoName, setUndoName] = useState<string | null>(null)
+  const undoRef = useRef<number | null>(null)
+  const [info, setInfo] = useState<Record<string, { family?: string; parameter_size?: string; quantization_level?: string; context_length?: number; vision?: boolean; tools?: boolean | null; suggested_num_ctx?: number; vram_warn?: string }>>({})
+  const [createName, setCreateName] = useState('')
+  const [modelfile, setModelfile] = useState('FROM qwen2.5-coder:7b\nPARAMETER num_ctx 8192\n')
+  const [creating, setCreating] = useState(false)
 
   const reload = async () => {
     try {
@@ -27,6 +37,20 @@ export default function Modelos() {
       setModels(m.models)
       setPulse(p)
       setErr('')
+      const names = (m.models || []).slice(0, 32)
+      void Promise.all(names.map(async (name) => {
+        try {
+          const r = await fetchWithAuth('/api/model/probe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: name }),
+          })
+          const j = await r.json()
+          setInfo((prev) => ({ ...prev, [name]: j }))
+        } catch {
+          /* probe opcional */
+        }
+      }))
     } catch (e) {
       setErr((e as Error).message)
     }
@@ -71,8 +95,9 @@ export default function Modelos() {
     setProgress(null)
   }
 
-  const doDelete = async (name: string) => {
-    if (!window.confirm(`¿Borrar el modelo ${name}?`)) return
+  const doDelete = (name: string) => setConfirmName(name)
+
+  const commitDelete = async (name: string) => {
     try {
       await api.deleteModel(name)
       await reload()
@@ -188,6 +213,43 @@ export default function Modelos() {
       </Card>
 
       <Card className="p-4">
+        <h2 className="mb-3 text-sm font-semibold">Crear desde Modelfile</h2>
+        <input
+          className="mb-2 w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm"
+          placeholder="nombre (ej. otter-coder:local)"
+          value={createName}
+          onChange={(e) => setCreateName(e.target.value)}
+          disabled={creating}
+        />
+        <textarea
+          className="mb-2 min-h-[88px] w-full rounded-lg border border-line bg-canvas px-3 py-2 font-mono text-xs"
+          value={modelfile}
+          onChange={(e) => setModelfile(e.target.value)}
+          disabled={creating}
+        />
+        <button
+          type="button"
+          disabled={!createName.trim() || !modelfile.trim() || creating}
+          onClick={() => {
+            const name = createName.trim()
+            setCreating(true)
+            void fetchWithAuth('/api/models/create', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model: name, modelfile }),
+            }).then(async (r) => {
+              if (!r.ok) throw new Error(`HTTP ${r.status}`)
+              setCreateName('')
+              await reload()
+            }).catch((e: Error) => setErr(e.message)).finally(() => setCreating(false))
+          }}
+          className="inline-flex h-9 items-center rounded-lg bg-accent px-3 text-sm font-medium text-accentink disabled:opacity-40"
+        >
+          {creating ? 'Creando…' : 'Crear modelo'}
+        </button>
+      </Card>
+
+      <Card className="p-4">
         <h2 className="mb-3 text-sm font-semibold">Disponibles ({models.length})</h2>
         {models.length === 0 ? (
           <p className="text-sm text-muted">No se pudo consultar Ollama.</p>
@@ -198,16 +260,33 @@ export default function Modelos() {
               return (
                 <div key={m} className="group flex items-center justify-between gap-3 rounded-lg px-3 py-2 hover:bg-canvas">
                   <div className="flex min-w-0 items-center gap-2">
-                    <span className="oc-mono truncate text-sm font-medium">{m}</span>
+                    <button
+                      type="button"
+                      className="oc-mono truncate text-sm font-medium hover:underline"
+                      title="Usar en el chat"
+                      onClick={() => {
+                        useUi.getState().setModel(m)
+                        useUi.getState().setNotice(`Modelo activo: ${m}`)
+                      }}
+                    >
+                      {m}
+                    </button>
                     {gpu && (
                       <Badge tone="ok">
                         <span className="oc-mono">{fmtBytes(gpu.size_vram)}</span>
                       </Badge>
                     )}
+                    {info[m]?.family && <span className="text-[10px] text-muted">{info[m].family}</span>}
+                    {info[m]?.parameter_size && <span className="text-[10px] text-muted">{info[m].parameter_size}</span>}
+                    {info[m]?.quantization_level && <span className="text-[10px] text-muted">{info[m].quantization_level}</span>}
+                    {info[m]?.context_length ? <span className="text-[10px] text-muted">ctx {info[m].context_length}</span> : null}
+                    {info[m]?.vision ? <Badge tone="ok">visión</Badge> : null}
+                    {info[m]?.tools ? <Badge tone="ok">tools</Badge> : null}
                   </div>
-                  <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <div className="flex shrink-0 gap-1">
                     <button
                       type="button"
+                      aria-label={`Copiar modelo ${m}`}
                       onClick={() => void doCopy(m)}
                       className="rounded-md p-1.5 text-muted hover:bg-panel hover:text-ink"
                       title="Copiar modelo"
@@ -216,9 +295,10 @@ export default function Modelos() {
                     </button>
                     <button
                       type="button"
+                      aria-label={`Eliminar modelo ${m}`}
                       onClick={() => void doDelete(m)}
                       className="rounded-md p-1.5 text-muted hover:bg-panel hover:text-danger"
-                      title="Borrar modelo"
+                      title="Eliminar modelo"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -229,6 +309,33 @@ export default function Modelos() {
           </div>
         )}
       </Card>
+      <ConfirmDialog
+        open={Boolean(confirmName)}
+        itemLabel={confirmName || 'este modelo'}
+        onCancel={() => setConfirmName(null)}
+        onConfirm={() => {
+          const name = confirmName
+          setConfirmName(null)
+          if (!name) return
+          setModels((ms) => ms.filter((x) => x !== name))
+          setUndoName(name)
+          if (undoRef.current) window.clearTimeout(undoRef.current)
+          undoRef.current = window.setTimeout(() => {
+            void commitDelete(name)
+            setUndoName(null)
+          }, 8000)
+        }}
+      />
+      {undoName && (
+        <UndoToast
+          label={undoName}
+          onUndo={() => {
+            if (undoRef.current) window.clearTimeout(undoRef.current)
+            setUndoName(null)
+            void reload()
+          }}
+        />
+      )}
     </div>
   )
 }

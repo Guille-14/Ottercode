@@ -9,10 +9,10 @@ export function Button({
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'ghost' | 'danger' }) {
   const base =
     'inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium ' +
-    'transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none'
+    'transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--oc-text2)]'
   const styles = {
     primary: 'bg-accent text-accentink hover:opacity-90',
-    ghost: 'bg-transparent text-muted hover:bg-panel',
+    ghost: 'bg-transparent text-muted hover:bg-panel2 hover:text-ink',
     danger: 'bg-accent text-accentink hover:opacity-90',
   }[variant]
   return <button className={`${base} ${styles} ${className}`} {...rest} />
