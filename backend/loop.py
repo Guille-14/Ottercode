@@ -191,8 +191,21 @@ def run_task_stream(run: OtterRun) -> Iterator[str]:
                 prev_block = _prev_conversation_block(run.continue_task)
                 if prev_block:
                     prompt = prev_block + "\n\n" + prompt
+            _follow_tools = None
+            if getattr(run, "continue_task", "") and getattr(run, "_files_ever_written", False):
+                _follow_tools = {
+                    "read_file", "edit_file", "append_file", "apply_patch",
+                    "tree", "list_dir", "grep_search", "execute_bash", "finalizar",
+                }
+                prompt += (
+                    "\n\n# MODO MEJORA (no hay write_file)\n"
+                    "write_file y mkdir están DESHABILITADOS. "
+                    "Lee el HTML/CSS/JS que ya existe y cámbialo con edit_file "
+                    "(old_string de 1-8 líneas exactas) o append_file. "
+                    "No inventes src/nutria ni un index.html nuevo."
+                )
             last_text_chat = yield from run_agent_turn(  # type: ignore[misc]
-                run, run.start_agent, 1, prompt)
+                run, run.start_agent, 1, prompt, only_tools=_follow_tools)
             # 🛟 v4.5 · RED DE RESCATE en modo agente: si soltó código cercado
             # como TEXTO sin usar NINGUNA skill de escritura, se guarda el
             # bloque mayor como archivo ANTES de dar la misión por terminada.

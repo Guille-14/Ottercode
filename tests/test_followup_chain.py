@@ -26,6 +26,28 @@ def test_followup_with_files_becomes_chat():
     assert run.start_agent == "developer"
 
 
+def test_second_html_rejected():
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    import tools
+
+    with TemporaryDirectory() as d:
+        wd = Path(d)
+        (wd / "src").mkdir()
+        (wd / "src" / "index.html").write_text("<html><body>hermes</body></html>", encoding="utf-8")
+        ex = tools.ToolExecutor(wd)
+        r = ex.dispatch("write_file", {"filepath": "src/nutria/index.html", "content": "<html>no</html>"})
+        assert r["ok"] is False
+        assert "edit_file" in r["output"]
+        r2 = ex.dispatch("edit_file", {
+            "filepath": "src/index.html",
+            "old_string": "hermes",
+            "new_string": "Hermes Agent",
+        })
+        assert r2["ok"] is True
+        assert "Hermes Agent" in (wd / "src" / "index.html").read_text(encoding="utf-8")
+
+
 def test_fresh_chain_untouched():
     class Run:
         mode = "chain"

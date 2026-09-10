@@ -507,6 +507,26 @@ class ToolExecutor:
                 old = ""
         new = str(content)
         allow_ow = os.environ.get("OTTERCODE_ALLOW_OVERWRITE", "0").strip().lower() in ("1", "true", "yes")
+        if (not existed) and path.suffix.lower() in {".html", ".htm"}:
+            others: List[str] = []
+            try:
+                for p in self.workdir.rglob("*"):
+                    if not p.is_file() or p.suffix.lower() not in {".html", ".htm"}:
+                        continue
+                    if p.name.startswith(".") or "node_modules" in p.parts:
+                        continue
+                    others.append(str(p.relative_to(self.workdir)))
+                    if len(others) >= 8:
+                        break
+            except OSError:
+                others = []
+            if others:
+                raise ToolError(
+                    "Ya hay HTML en el workspace ("
+                    + ", ".join(others)
+                    + "). PROHIBIDO crear otro .html. "
+                    "Usa read_file + edit_file (o append_file) sobre el archivo existente."
+                )
         if existed and old.strip() and len(old) > 80 and not allow_ow:
             snippet = "\n".join(old.splitlines()[:50])[:2500]
             raise ToolError(
