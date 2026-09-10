@@ -94,10 +94,30 @@ def get_model_vision(model_name: str, show: Optional[Dict[str, Any]] = None) -> 
     return False
 
 
+def get_model_tools_capable(model_name: str, show: Optional[Dict[str, Any]] = None) -> Optional[bool]:
+    """True/False si /api/show declara capabilities; None si falta el campo o falla."""
+    data = show if isinstance(show, dict) else show_model(model_name)
+    if not data:
+        return None
+    if "capabilities" not in data:
+        return None
+    caps = data.get("capabilities")
+    if caps is None:
+        return None
+    if isinstance(caps, str):
+        parts = [c.strip().lower() for c in caps.replace(",", " ").split() if c.strip()]
+    elif isinstance(caps, list):
+        parts = [str(c).strip().lower() for c in caps]
+    else:
+        return None
+    return "tools" in parts
+
+
 def probe(model_name: str) -> Dict[str, Any]:
     data = show_model(model_name)
     ctx = get_model_context(model_name, data)
     vis = get_model_vision(model_name, data)
+    tools_cap = get_model_tools_capable(model_name, data)
     warn = ""
     suggest = None
     try:
@@ -121,6 +141,7 @@ def probe(model_name: str) -> Dict[str, Any]:
         "model": model_name,
         "context_length": ctx,
         "vision": vis,
+        "tools": tools_cap,
         "family": (data.get("details") or {}).get("family"),
         "parameter_size": (data.get("details") or {}).get("parameter_size"),
         "quantization_level": (data.get("details") or {}).get("quantization_level"),

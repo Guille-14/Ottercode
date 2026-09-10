@@ -26,7 +26,7 @@ export default function Modelos() {
   const [confirmName, setConfirmName] = useState<string | null>(null)
   const [undoName, setUndoName] = useState<string | null>(null)
   const undoRef = useRef<number | null>(null)
-  const [info, setInfo] = useState<Record<string, { family?: string; parameter_size?: string; quantization_level?: string; context_length?: number; vision?: boolean; suggested_num_ctx?: number; vram_warn?: string }>>({})
+  const [info, setInfo] = useState<Record<string, { family?: string; parameter_size?: string; quantization_level?: string; context_length?: number; vision?: boolean; tools?: boolean | null; suggested_num_ctx?: number; vram_warn?: string }>>({})
   const [createName, setCreateName] = useState('')
   const [modelfile, setModelfile] = useState('FROM qwen2.5-coder:7b\nPARAMETER num_ctx 8192\n')
   const [creating, setCreating] = useState(false)
@@ -37,6 +37,20 @@ export default function Modelos() {
       setModels(m.models)
       setPulse(p)
       setErr('')
+      const names = (m.models || []).slice(0, 32)
+      void Promise.all(names.map(async (name) => {
+        try {
+          const r = await fetchWithAuth('/api/model/probe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: name }),
+          })
+          const j = await r.json()
+          setInfo((prev) => ({ ...prev, [name]: j }))
+        } catch {
+          /* probe opcional */
+        }
+      }))
     } catch (e) {
       setErr((e as Error).message)
     }
@@ -267,6 +281,7 @@ export default function Modelos() {
                     {info[m]?.quantization_level && <span className="text-[10px] text-muted">{info[m].quantization_level}</span>}
                     {info[m]?.context_length ? <span className="text-[10px] text-muted">ctx {info[m].context_length}</span> : null}
                     {info[m]?.vision ? <Badge tone="ok">visión</Badge> : null}
+                    {info[m]?.tools ? <Badge tone="ok">tools</Badge> : null}
                   </div>
                   <div className="flex shrink-0 gap-1">
                     <button

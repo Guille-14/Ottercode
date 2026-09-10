@@ -187,6 +187,13 @@ def native_tools_enabled(model: str) -> bool:
         return True
     if mode in ("off", "0", "false", "no"):
         return False
+    try:
+        from backend.model_probe import get_model_tools_capable
+        cap = get_model_tools_capable(model)
+    except Exception:
+        cap = None
+    if cap is not None:
+        return bool(cap)
     name = (model or "").lower()
     return any(m in name for m in _NATIVE_AUTO_MARKERS)
 

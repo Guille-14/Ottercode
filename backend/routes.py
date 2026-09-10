@@ -605,6 +605,8 @@ def api_model_show(req: ModelNameRequest) -> Dict[str, Any]:
     import backend.settings as _s
     fit = _s.suggest_num_ctx(req.model, context_max=ctx_max, size_bytes=size_b, vram_free=free)
     vision = model_supports_vision(req.model, {**data, **details, "family": details.get("family"), "capabilities": data.get("capabilities")})
+    from backend.model_probe import get_model_tools_capable
+    tools_cap = get_model_tools_capable(req.model, data)
     return {
         "ok": True,
         "model": req.model,
@@ -620,6 +622,7 @@ def api_model_show(req: ModelNameRequest) -> Dict[str, Any]:
         "capabilities": data.get("capabilities") or [],
         "context_length": ctx_max or None,
         "vision": vision,
+        "tools": tools_cap,
         "suggested_num_ctx": fit.get("num_ctx"),
         "ctx_source": fit.get("source"),
         "vram_warn": fit.get("warn") or "",
