@@ -114,9 +114,14 @@ export default function ChatInputBar({
 
   useEffect(() => {
     if (!model) return
-    api.showModel(model).then((info) => {
-      setVisionOk(Boolean(info.vision) || /llava|vision|moondream|minicpm-v/i.test(model))
-    }).catch(() => setVisionOk(/llava|vision|moondream|minicpm-v/i.test(model)))
+    fetchWithAuth('/api/model/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    }).then((r) => r.json()).then((info) => {
+      setVisionOk(Boolean(info.vision) || /llava|qwen2.5vl|gemma3|vision|moondream|minicpm-v/i.test(model))
+      if (info.vram_warn) useUi.getState().setNotice(String(info.vram_warn))
+    }).catch(() => setVisionOk(/llava|qwen2.5vl|gemma3|vision|moondream|minicpm-v/i.test(model)))
   }, [model])
 
   useEffect(() => {
@@ -129,7 +134,7 @@ export default function ChatInputBar({
       }).catch(() => { if (on) setHealth('down') })
     }
     tick()
-    const id = window.setInterval(tick, 8000)
+    const id = window.setInterval(tick, 5000)
     return () => { on = false; window.clearInterval(id) }
   }, [])
 
@@ -363,6 +368,19 @@ export default function ChatInputBar({
                 {a.name}
               </span>
             ))}
+            {!visionOk && attach.some((a) => a.preview) && (
+              <button
+                type="button"
+                className="rounded-lg border border-line px-2 py-1 text-[11px] text-accent"
+                onClick={() => {
+                  const first = attach.find((a) => a.preview)
+                  useUi.getState().setNotice('Alternativa: tool image_describe sobre el workspace (guarda la imagen en la misión).')
+                  if (first) setTask((t) => t + `\nUsa image_describe sobre ${first.name}\n`)
+                }}
+              >
+                Usar image_describe
+              </button>
+            )}
           </div>
         )}
         {/* Autocomplete de slash commands */}
@@ -422,7 +440,6 @@ export default function ChatInputBar({
               ))}
             </select>
           )}
-          {/* Selector de modo explícito */}
           <select
             id="modeSel2"
             aria-label="Modo de agente"

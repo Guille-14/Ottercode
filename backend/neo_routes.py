@@ -1,9 +1,10 @@
 """Rutas Neo: journey, cron, subagentes, voz, bots, artefactos, config, memory."""
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -187,3 +188,56 @@ def api_bots_save(req: BotReq) -> Dict[str, Any]:
 def api_neo_config() -> Dict[str, Any]:
     from backend.home import load_config
     return {"ok": True, "config": load_config()}
+
+
+
+class ProbeReq(BaseModel):
+    model: str = ""
+
+
+@router.post("/api/model/probe")
+def api_model_probe(req: ProbeReq) -> Dict[str, Any]:
+    from backend.model_probe import probe
+    from backend.ollama import LAST_GENERATE_TIMEOUT, generate_timeout_for
+    from backend.config import OLLAMA_BASE_URL
+    to = generate_timeout_for(OLLAMA_BASE_URL)
+    p = probe(req.model)
+    p["read_timeout_s"] = to[1]
+    p["connect_timeout_s"] = to[0]
+    p["last_generate_timeout"] = list(LAST_GENERATE_TIMEOUT)
+    return p
+
+
+@router.get("/api/prompt-size")
+def api_prompt_size() -> Dict[str, Any]:
+    """Diagnóstico de tamaño de prompt sin llamar al modelo."""
+    from backend.agents import get_agent, tool_protocol
+    from backend.md_skills import list_md_skills
+    import tools as T
+    items: List[Dict[str, Any]] = []
+    agent = get_agent("agent")
+    base = str(getattr(agent, "system_prompt", "") or "")
+    items.append({"kind": "system", "name": "BASE_AGENT", "bytes": len(base.encode("utf-8"))})
+    proto = tool_protocol([t for t in T.TOOL_NAMES if True])
+    items.append({"kind": "protocol", "name": "tool_protocol", "bytes": len(proto.encode("utf-8"))})
+    for s in list_md_skills():
+        body = str(s.get("body") or "")
+        items.append({
+            "kind": "skill",
+            "name": s.get("name"),
+            "enabled": bool(s.get("enabled")),
+            "bytes": len(body.encode("utf-8")),
+        })
+    for name, meta in T.TOOLS.items():
+        schema = T.get_ollama_tools([name])
+        blob = json.dumps(schema, ensure_ascii=False)
+        items.append({"kind": "tool_schema", "name": name, "bytes": len(blob.encode("utf-8"))})
+    items.sort(key=lambda x: int(x.get("bytes") or 0), reverse=True)
+    total = sum(int(x.get("bytes") or 0) for x in items if x.get("kind") != "tool_schema" or True)
+    skills_on = sum(int(x["bytes"]) for x in items if x.get("kind") == "skill" and x.get("enabled"))
+    return {
+        "ok": True,
+        "total_kb": round(sum(int(x.get("bytes") or 0) for x in items) / 1024, 2),
+        "skills_enabled_kb": round(skills_on / 1024, 2),
+        "items": items[:80],
+    }

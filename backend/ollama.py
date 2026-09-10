@@ -201,6 +201,11 @@ def invalidate_models_cache() -> None:
     """Invalida la caché de modelos (tras pull/create/delete/copy)."""
     global _models_cache
     _models_cache = None
+    try:
+        from backend.model_probe import invalidate_probe
+        invalidate_probe()
+    except Exception:
+        pass
 
 
 _VISION_MARKERS = (
@@ -211,38 +216,17 @@ _VISION_MARKERS = (
 
 
 def model_supports_vision(model: str, show: Optional[Dict[str, Any]] = None) -> bool:
-    name = (model or "").lower()
-    if any(m in name for m in _VISION_MARKERS):
+    from backend.model_probe import get_model_vision
+    if get_model_vision(model, show if isinstance(show, dict) else None):
         return True
-    if not isinstance(show, dict):
-        return False
-    caps = show.get("capabilities") or (show.get("details") or {}).get("capabilities") or []
-    blob = " ".join(str(c).lower() for c in (caps if isinstance(caps, list) else [caps]))
-    fam = str((show.get("family") or (show.get("details") or {}).get("family") or "")).lower()
-    return "vision" in blob or any(m in fam for m in _VISION_MARKERS)
+    name = (model or "").lower()
+    return any(m in name for m in _VISION_MARKERS)
 
 
 def parse_context_length(show: Dict[str, Any]) -> int:
-    """num_ctx máximo declarado por /api/show (model_info / parameters)."""
-    info = show.get("model_info") or show.get("modelinfo") or {}
-    if isinstance(info, dict):
-        for k, v in info.items():
-            if "context_length" in str(k).lower() or str(k).endswith(".context_length"):
-                try:
-                    n = int(v)
-                    if n >= 512:
-                        return n
-                except (TypeError, ValueError):
-                    pass
-    params = str(show.get("parameters") or "")
-    m = re.search(r"num_ctx\s+(\d+)", params, re.I)
-    if m:
-        return max(512, int(m.group(1)))
-    mf = str(show.get("modelfile") or "")
-    m2 = re.search(r"PARAMETER\s+num_ctx\s+(\d+)", mf, re.I)
-    if m2:
-        return max(512, int(m2.group(1)))
-    return 0
+    from backend.model_probe import get_model_context
+    n = get_model_context("", show if isinstance(show, dict) else {})
+    return int(n or 0)
 
 
 def strip_image_b64(raw: str) -> str:
@@ -377,6 +361,43 @@ def ensure_gpu_exclusive(keep_model: str) -> None:
             pass
 
 
+LAST_GENERATE_TIMEOUT: Tuple[int, int] = GENERATE_TIMEOUT
+
+
+def _host_is_local(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        host = ""
+    if not host or host in ("localhost", "127.0.0.1", "::1"):
+        return True
+    if "." not in host:
+        return True
+    if host.startswith("10.") or host.startswith("192.168."):
+        return True
+    if host.startswith("172."):
+        try:
+            second = int(host.split(".")[1])
+            if 16 <= second <= 31:
+                return True
+        except (IndexError, ValueError):
+            pass
+    return False
+
+
+def generate_timeout_for(url: str = "") -> Tuple[int, int]:
+    """Timeout efectivo de la petición LLM (leíble en LAST_GENERATE_TIMEOUT)."""
+    global LAST_GENERATE_TIMEOUT
+    base = url or OLLAMA_BASE_URL
+    if _host_is_local(base):
+        read = int(os.environ.get("OTTERCODE_OLLAMA_READ_TIMEOUT", "1200") or "1200")
+        LAST_GENERATE_TIMEOUT = (15, max(900, read))
+    else:
+        LAST_GENERATE_TIMEOUT = GENERATE_TIMEOUT
+    return LAST_GENERATE_TIMEOUT
+
+
 def stream_llm(
     run: Any, agent_id: str, system_prompt: str, prompt: str
 ) -> Iterator[str]:
@@ -408,7 +429,7 @@ def stream_llm(
         _chat_tool_calls: List[Any] = []
         try:
             with _ollama_session.post(
-                url, json=payload, stream=True, timeout=GENERATE_TIMEOUT,
+                url, json=payload, stream=True, timeout=generate_timeout_for(url),
             ) as resp:
                 # Abort agresivo: api_abort cierra este socket y el stream muere
                 # al instante (antes el abort esperaba al timeout de 300 s).
@@ -609,6 +630,8 @@ def _llm_request(run: Any, system_prompt: str, prompt: str, agent_id: str = "") 
         _messages.extend(list(_hist))
     else:
         _messages.append({"role": "user", "content": prompt})
+    raw_imgs = list(getattr(run, "_images", None) or [])[:4]
+    imgs = [strip_image_b64(x) for x in raw_imgs if str(x).strip()]
     if imgs:
         _messages = _with_images(_messages, imgs)
     payload = {
